@@ -15,5 +15,8 @@ export default defineConfig([
     fixedExtension: false,
     dts: false,
     clean: false,
+    // registry.ts resolves ./models.json relative to import.meta.url; the
+    // bundle lands in lib/, so the builtin data must sit next to it.
+    copy: ['src/models.json'],
   },
 ])
