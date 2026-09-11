@@ -1,0 +1,6 @@
+# dsh-client-ui-memory bundle layer: the node half is a pure UI plugin — the
+# empty apply only seats the package in the loader; the browser half ships
+# via exports["./client"] and the dsh.client manifest declaration.
+- insert:
+    - id: client-ui-memory
+      name: './lib/index.js'

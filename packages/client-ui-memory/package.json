@@ -1,0 +1,66 @@
+{
+  "name": "dsh-client-ui-memory",
+  "description": "Inline transcript cards for engram memory MCP tool calls, over the tool.call.toolview slot",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-tool"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/types/**/*.d.ts",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsdown",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "link:../../../deepseek-harness/vendor/cordis",
+    "@deepseek-ai/dsh-client-locale": "link:../../../deepseek-harness/packages/client/locale",
+    "@deepseek-ai/dsh-client-ui-chat": "link:../../../deepseek-harness/packages/client/ui-chat",
+    "@deepseek-ai/dsh-client-ui-renderer": "link:../../../deepseek-harness/packages/client/ui-renderer",
+    "@deepseek-ai/dsh-client-ui-slots": "link:../../../deepseek-harness/packages/client/ui-slots",
+    "@deepseek-ai/dsh-client-ui-tool": "link:../../../deepseek-harness/packages/client/ui-tool",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "~18.3.1",
+    "jsdom": "^25.0.0",
+    "lightningcss": "^1.28.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "@types/react-dom": "~18.3.1",
+    "typescript": "^5.6.0",
+    "tsdown": "^0.12.0",
+    "vitest": "^3.0.0"
+  }
+}

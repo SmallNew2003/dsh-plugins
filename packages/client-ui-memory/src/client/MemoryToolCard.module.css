@@ -1,0 +1,85 @@
+/* Inline memory card: one compact row, payload expands below. */
+
+.card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  border-inline-start: 2px solid var(--dsh-border, #d0d4dc);
+  font-size: 0.875rem;
+  min-width: 0;
+}
+
+.card[data-error] {
+  border-inline-start-color: var(--dsh-danger, #d05252);
+}
+
+.glyph {
+  flex: none;
+}
+
+.action {
+  flex: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.state {
+  flex: none;
+  opacity: 0.7;
+  font-style: italic;
+}
+
+.headline {
+  flex: 0 1 auto;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count {
+  flex: none;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.detail {
+  flex: 1 1 12rem;
+  min-width: 0;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  flex: none;
+  opacity: 0.5;
+}
+
+.toggle {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--dsh-link, #3b6ef5);
+  cursor: pointer;
+}
+
+.payload {
+  flex-basis: 100%;
+  margin: 0.25rem 0 0;
+  padding: 0.5rem;
+  border-radius: 0.375rem;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 16rem;
+  overflow: auto;
+}

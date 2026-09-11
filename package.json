@@ -5,7 +5,7 @@
   "description": "Personal DSH plugin monorepo",
   "scripts": {
     "build": "pnpm -r run build",
-    "test": "pnpm -r run test"
+    "test": "vitest run"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
