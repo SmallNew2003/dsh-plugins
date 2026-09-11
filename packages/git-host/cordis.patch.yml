@@ -1,6 +1,10 @@
 # dsh-git-host bundle layer: the git domain service plus its four webServer
-# routes. Insertion order relative to tool-git-worktree decides nothing — the
-# tool plugin resolves gitWorktree lazily through its inject.
+# routes. Config is fully required (no hardcoded tunables), so the bundle
+# layer ships sensible defaults; a user patch may override by entry id.
 - insert:
     - id: git-host
       name: './lib/index.js'
+      config:
+        commandTimeoutMs: 30000
+        dirtyCheckLimit: 8
+        statusCacheTtlMs: 5000
