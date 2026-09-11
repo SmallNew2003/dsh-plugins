@@ -1,0 +1,360 @@
+schema: comet.native.v4
+name: dsh-git-worktree-phase-a
+language: zh-CN
+phase: build
+status: active
+state_version: 2
+brief: brief.md
+spec_changes:
+  - capability: git-host
+    operation: create
+    source: specs/git-host/spec.md
+  - capability: git-tool
+    operation: create
+    source: specs/git-tool/spec.md
+  - capability: git-ui
+    operation: create
+    source: specs/git-ui/spec.md
+workspace:
+  isolation: current
+  change_branch: master
+  target_branch: master
+  finish: null
+loop:
+  stage: building
+  goal_cycle: 1
+  iteration: 1
+  attempt: 0
+  retry_epoch: 0
+  failed_iteration_count: 0
+  no_progress_count: 0
+  execution_failure_count: 0
+  previous_unresolved_ids: []
+  next_action: submit-builder-candidate
+acceptance:
+  - id: A1
+    source: brief.md
+    text: A1:会话 cwd 属于 git 仓库时,Session header 显示分支名徽章;cwd 非 git 仓库、cwd 不存在或 host 无
+      git 命令时,徽章不渲染。
+    result: pending
+    reason: null
+  - id: A2
+    source: brief.md
+    text: A2:会话 cwd 位于 worktree 时,徽章带 worktree 标记,tooltip 展示 worktree 路径与 main
+      仓库路径;main checkout 无该标记。
+    result: pending
+    reason: null
+  - id: A3
+    source: brief.md
+    text: A3:点击徽章打开面板,列出全部 worktree(路径、分支、main 徽标、脏状态计数,顺序同 `git worktree
+      list`);Escape 与点击面板外部关闭并归还焦点。
+    result: pending
+    reason: null
+  - id: A4
+    source: brief.md
+    text: A4:面板每次打开时拉取 status 与 worktrees;面板内手动刷新按钮点击后重新拉取并呈现最新数据。
+    result: pending
+    reason: null
+  - id: A5
+    source: brief.md
+    text: A5:面板内新建 worktree:输入名称与分支名(默认同名),路径默认 `<repo 父目录>/<repo 名>-<名称>` 且可修改;成功后新
+      worktree 出现在列表。
+    result: pending
+    reason: null
+  - id: A6
+    source: brief.md
+    text: A6:删除脏 worktree:删除按钮禁用并展示更改摘要;勾选"丢弃更改"后按钮可用,确认后该 worktree 被删除并从列表移除。
+    result: pending
+    reason: null
+  - id: A7
+    source: brief.md
+    text: A7:main worktree 与当前会话 workspace 所在 worktree 不提供删除入口;host 对这两类删除请求返回
+      `git/protected`。
+    result: pending
+    reason: null
+  - id: A8
+    source: brief.md
+    text: A8:模型可调用
+      `git_worktree_list`/`git_worktree_add`/`git_worktree_remove`;调用与结果记录在会话日志;remove
+      对脏 worktree 且未显式 `discardChanges` 时返回结构化错误且不执行删除。
+    result: pending
+    reason: null
+  - id: A9
+    source: brief.md
+    text: A9:全部用户可见文案来自双语字典;host 错误以结构化错误码传递,面板将已知码映射为具体文案,未知码显示通用错误文案。
+    result: pending
+    reason: null
+  - id: A10
+    source: brief.md
+    text: A10:status 读取带短 TTL 缓存(TTL 由 host Config
+      提供);切换会话或关闭后重开面板时重新拉取,呈现当前会话仓库的最新分支。
+    result: pending
+    reason: null
+  - id: A11
+    source: specs/git-host/spec.md
+    text: 归档后的完整行为:插件包 `dsh-git-host` 在 host 进程内提供 git 查询与 worktree 管理服务,经 webServer
+      路由暴露给浏览器,经服务面暴露给模型工具。
+    result: pending
+    reason: null
+  - id: A12
+    source: specs/git-host/spec.md
+    text: 一个 host 插件包,内部两层:git 域服务(命令执行、解析、保护规则)与路由 Consumer。UI 包与工具包是同一服务的另外两个
+      Consumer;本包不依赖任何 Desktop 专用 service,普通 `dsh web` 组合同样可用。
+    result: pending
+    reason: null
+  - id: A13
+    source: specs/git-host/spec.md
+    text: 按 `sessionId` 解析会话工作目录(cwd,来自 host 侧 session 摘要;具体接口在 Build 第一轮核实并记录)。
+    result: pending
+    reason: null
+  - id: A14
+    source: specs/git-host/spec.md
+    text: 由 cwd 向上解析仓库根:`git -C <cwd> rev-parse --show-toplevel` 取当前 worktree
+      根,`rev-parse --git-common-dir` 取 main 仓库标识;一次解析、进程内缓存,以路径失效。
+    result: pending
+    reason: null
+  - id: A15
+    source: specs/git-host/spec.md
+    text: cwd 不存在返回 `git/missing-dir`;目录不是 git 仓库返回 `git/not-repo`;git 命令不在 PATH 返回
+      `git/unavailable`。
+    result: pending
+    reason: null
+  - id: A16
+    source: specs/git-host/spec.md
+    text: 全部路由要求与 open-in-app 同级的浏览器鉴权与 origin 校验,并校验 sessionId 归属。
+    result: pending
+    reason: null
+  - id: A17
+    source: specs/git-host/spec.md
+    text: "| 路由 | 行为 |"
+    result: pending
+    reason: null
+  - id: A18
+    source: specs/git-host/spec.md
+    text: "| `GET /git/status?sessionId=` | 返回:{ branch(分离 HEAD 时为 `HEAD` + 短
+      sha)、isWorktree、worktreePath、mainRepoPath、dirtyCount } |"
+    result: pending
+    reason: null
+  - id: A19
+    source: specs/git-host/spec.md
+    text: "| `GET /git/worktrees?sessionId=` | `git worktree list --porcelain`
+      投影数组:{ path、branch、head、isMain、dirtyCount };顺序同 git 输出 |"
+    result: pending
+    reason: null
+  - id: A20
+    source: specs/git-host/spec.md
+    text: "| `POST /git/worktrees?sessionId=` | body { name, branch, createBranch?,
+      startPoint?, path? };执行 `git worktree add`;成功返回新建行;路径冲突、分支冲突透传为
+      `git/command-failed` 携带 stderr 摘要 |"
+    result: pending
+    reason: null
+  - id: A21
+    source: specs/git-host/spec.md
+    text: "| `DELETE /git/worktrees?sessionId=&path=&discardChanges=` | 删除指定
+      worktree,受 §5 保护规则;成功返回删除确认 |"
+    result: pending
+    reason: null
+  - id: A22
+    source: specs/git-host/spec.md
+    text: 脏状态:`git -C <path> status --porcelain` 非空行数即 dirtyCount。
+    result: pending
+    reason: null
+  - id: A23
+    source: specs/git-host/spec.md
+    text: "worktree 列表的脏检查逐个执行,受 Config `dirtyCheckLimit` 限制:超出上限的 worktree 不计脏状态并以
+      `dirtyChecked: false` 标注,UI 显示为未知而非零。"
+    result: pending
+    reason: null
+  - id: A24
+    source: specs/git-host/spec.md
+    text: 新建:`git -C <mainRepoPath> worktree add [-b <branch>] [<startPoint>]
+      <path>`。
+    result: pending
+    reason: null
+  - id: A25
+    source: specs/git-host/spec.md
+    text: 删除:`git worktree remove <path>`;仅当请求显式 `discardChanges=true` 时追加 `--force`。
+    result: pending
+    reason: null
+  - id: A26
+    source: specs/git-host/spec.md
+    text: 每个 git 命令经 subprocess 能力执行,deadline 取 Config `commandTimeoutMs`;超时/取消返回
+      `git/command-failed` 并注明原因。
+    result: pending
+    reason: null
+  - id: A27
+    source: specs/git-host/spec.md
+    text: 目标 worktree dirtyCount > 0 且请求未带 `discardChanges=true` →
+      拒绝(`git/dirty`),附更改摘要(计数 + 至多前 10 个更改路径)。
+    result: pending
+    reason: null
+  - id: A28
+    source: specs/git-host/spec.md
+    text: main worktree 拒绝删除(`git/protected`);当前会话 workspace 所在 worktree
+      拒绝删除(`git/protected`)。UI 不提供入口,host 再次拒绝 —— 双保险,规则在服务层执行,路由与工具都无法绕过。
+    result: pending
+    reason: null
+  - id: A29
+    source: specs/git-host/spec.md
+    text: "`discardChanges=true` 但实际无更改 → 照常删除,不视为错误。"
+    result: pending
+    reason: null
+  - id: A30
+    source: specs/git-host/spec.md
+    text: 结构化错误码:`git/unavailable`、`git/not-repo`、`git/missing-dir`、`git/dirty`、`git/protected`、`git/command-failed`(携带
+      stderr 摘要与退出码)。错误体为 JSON:{ code, message, detail? }。
+    result: pending
+    reason: null
+  - id: A31
+    source: specs/git-host/spec.md
+    text: Config(全部经 cordis Config 校验,无硬编码 tunables):`commandTimeoutMs`(单个 git 命令
+      deadline,必填)、`dirtyCheckLimit`(脏检查 worktree
+      数上限,必填)、`statusCacheTtlMs`(status 缓存 TTL,必填)。
+    result: pending
+    reason: null
+  - id: A32
+    source: specs/git-host/spec.md
+    text: SSH 情形:git 与会话同 host 执行,不受 open-in-app 的 SSH 禁用规则约束;仅 cwd 不可达时按
+      `git/missing-dir` 降级。
+    result: pending
+    reason: null
+  - id: A33
+    source: specs/git-tool/spec.md
+    text: 归档后的完整行为:插件包 `dsh-tool-git-worktree` 向 agent 暴露 worktree 查询与管理工具。
+    result: pending
+    reason: null
+  - id: A34
+    source: specs/git-tool/spec.md
+    text: 一个工具插件包,注入 host 包 `dsh-git-host` 的 git 服务;工具与路由是同一服务的两个
+      Consumer,保护规则只有一份实现。
+    result: pending
+    reason: null
+  - id: A35
+    source: specs/git-tool/spec.md
+    text: "| 工具 | 参数 | 行为 |"
+    result: pending
+    reason: null
+  - id: A36
+    source: specs/git-tool/spec.md
+    text: "| `git_worktree_list` | 无 | 返回当前会话仓库的全部 worktree(路径、分支、是否 main、脏状态);等价于
+      UI 列表数据 |"
+    result: pending
+    reason: null
+  - id: A37
+    source: specs/git-tool/spec.md
+    text: "| `git_worktree_add` | name, branch?, createBranch?, startPoint?, path? |
+      新建 worktree;语义与 host 新建路由一致 |"
+    result: pending
+    reason: null
+  - id: A38
+    source: specs/git-tool/spec.md
+    text: "| `git_worktree_remove` | path, discardChanges? | 删除 worktree;保护规则与 host
+      删除路由一致:脏且未显式 `discardChanges` 时返回结构化错误(`git/dirty`)并不执行;main 与当前会话所在
+      worktree 返回 `git/protected` |"
+    result: pending
+    reason: null
+  - id: A39
+    source: specs/git-tool/spec.md
+    text: 工具在会话内执行,作用于当前会话 cwd 所在仓库;调用与结果自动记录在会话日志,无需额外 session 事件。
+    result: pending
+    reason: null
+  - id: A40
+    source: specs/git-tool/spec.md
+    text: 工具描述(模型可见文本)为英文,遵循上游工具文本惯例;结果为结构化 JSON,与 host 路由返回形状一致。
+    result: pending
+    reason: null
+  - id: A41
+    source: specs/git-tool/spec.md
+    text: Phase A 不提供切分支工具;工具集不包含任何绕过 §删除保护 的参数。
+    result: pending
+    reason: null
+  - id: A42
+    source: specs/git-ui/spec.md
+    text: 归档后的完整行为:插件包 `dsh-client-ui-git` 在 Web GUI 中呈现会话的 git 状态徽章与 worktree 管理面板。
+    result: pending
+    reason: null
+  - id: A43
+    source: specs/git-ui/spec.md
+    text: 一个 client UI 插件包,依赖 host 包 `dsh-git-host` 的路由数据;遵守上游 client
+      插件纪律:槽位唯一注册通道、组件只见四类 props 共享、共享/存活状态用 register 声明的 store、产品文案全部来自双语字典。
+    result: pending
+    reason: null
+  - id: A44
+    source: specs/git-ui/spec.md
+    text: 徽章注册于 `conversation.session.header.actions`:显示当前分支名(A1);会话 cwd 位于 worktree
+      时附加树形标记,tooltip 展示 worktree 路径与 main 仓库路径(A2);A1 的不渲染条件在此执行:非 git 仓库、cwd
+      缺失、host 无 git、host 路由不可达时徽章完全不出现。
+    result: pending
+    reason: null
+  - id: A45
+    source: specs/git-ui/spec.md
+    text: "点击徽章打开 popover 面板(A3):"
+    result: pending
+    reason: null
+  - id: A46
+    source: specs/git-ui/spec.md
+    text: worktree 列表:每行显示路径、分支、main 徽标、脏状态计数;脏状态未检查的行显示"未知"而非 0;
+    result: pending
+    reason: null
+  - id: A47
+    source: specs/git-ui/spec.md
+    text: 新建表单:名称与分支名(默认同名),路径默认 `<repo 父目录>/<repo 名>-<名称>`
+      且可修改;提交调用新建路由,成功后新行出现(A5);
+    result: pending
+    reason: null
+  - id: A48
+    source: specs/git-ui/spec.md
+    text: 删除:脏 worktree 的删除按钮禁用并展示更改摘要(计数 + 至多前 10
+      个更改路径);勾选"丢弃更改"后按钮可用,再次确认后执行(A6);main 与当前会话所在 worktree 不渲染删除按钮(A7);
+    result: pending
+    reason: null
+  - id: A49
+    source: specs/git-ui/spec.md
+    text: Escape 与点击面板外部关闭面板,焦点归还触发器。
+    result: pending
+    reason: null
+  - id: A50
+    source: specs/git-ui/spec.md
+    text: 面板每次打开时拉取 status 与 worktrees(A4);面板内提供手动刷新按钮,点击重新拉取。
+    result: pending
+    reason: null
+  - id: A51
+    source: specs/git-ui/spec.md
+    text: status 结果按 host 提供的 TTL 语义短缓存;切换会话或关闭后重开面板时重新拉取,呈现当前会话仓库的最新分支(A10)。
+    result: pending
+    reason: null
+  - id: A52
+    source: specs/git-ui/spec.md
+    text: Phase A 不订阅任何推送;所有更新由打开/刷新触发。
+    result: pending
+    reason: null
+  - id: A53
+    source: specs/git-ui/spec.md
+    text: 全部产品文案(徽章 tooltip、面板标题、按钮、错误提示、确认文案)来自双语 locale 字典,经标准 `t` 或本地化
+      props;用户数据(路径、分支名)原样展示。
+    result: pending
+    reason: null
+  - id: A54
+    source: specs/git-ui/spec.md
+    text: host 结构化错误码映射:已知码(`git/dirty`、`git/protected`、`git/not-repo`
+      等)映射为具体文案;未知码显示通用错误文案并保留 detail(A9)。
+    result: pending
+    reason: null
+builder_handoff: null
+blockers: []
+verification: null
+history: []
+history_overflow:
+  dropped_entries: 0
+  first_dropped_at: null
+  last_dropped_at: null
+  outcome_counts:
+    pass: 0
+    fail: 0
+    blocked: 0
+    execution-error: 0
+    recovery: 0
+verification_result: pending
+verification_report: null
+archived: false
+created_at: 2026-09-11T04:15:03.104Z

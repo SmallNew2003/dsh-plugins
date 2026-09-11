@@ -1,0 +1,46 @@
+{
+  "name": "dsh-tool-git-worktree",
+  "description": "Model tools for git worktrees: list, add, and remove over the dsh-git-host service",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/types/**/*.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsdown",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "link:../../../deepseek-harness/packages/core/tools"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4",
+    "dsh-git-host": "workspace:^"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "link:../../../deepseek-harness/vendor/cordis",
+    "typescript": "^5.6.0",
+    "tsdown": "^0.12.0",
+    "vitest": "^3.0.0",
+    "dsh-git-host": "workspace:^",
+    "@deepseek-ai/dsh-system-prompt": "link:../../../deepseek-harness/packages/core/system-prompt"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

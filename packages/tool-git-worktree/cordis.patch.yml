@@ -1,0 +1,5 @@
+# tool-git-worktree bundle layer: the three model tools over the
+# dsh-git-host service (resolved by service name, not by import).
+- insert:
+    - id: tool-git-worktree
+      name: './lib/index.js'

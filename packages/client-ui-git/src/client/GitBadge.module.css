@@ -1,0 +1,189 @@
+.root {
+  position: relative;
+  display: inline-flex;
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  padding: 2px 8px;
+  border: 1px solid var(--dsh-border-color, rgba(127, 127, 127, 0.35));
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trigger:focus-visible {
+  outline: 2px solid var(--dsh-focus-color, #4c8dff);
+  outline-offset: 1px;
+}
+
+.marker {
+  flex: none;
+  font-size: 11px;
+}
+
+.panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 420px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--dsh-border-color, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  background: var(--dsh-panel-bg, #ffffff);
+  color: inherit;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.panelTitle {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.refresh {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.list {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.rowPath {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowBranch {
+  flex: none;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mainBadge {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--dsh-border-color, rgba(127, 127, 127, 0.35));
+  font-size: 10px;
+}
+
+.dirty {
+  flex: none;
+  min-width: 48px;
+  text-align: right;
+}
+
+.delete {
+  flex: none;
+  border: 1px solid var(--dsh-border-color, rgba(127, 127, 127, 0.35));
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.delete:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.deleteRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 6px;
+  font-size: 11px;
+}
+
+.error {
+  margin: 4px 0 8px;
+  color: #c0392b;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.addForm {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 8px;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid var(--dsh-border-color, rgba(127, 127, 127, 0.35));
+  font-size: 12px;
+}
+
+.addForm label {
+  color: var(--dsh-text-muted, #888);
+}
+
+.addForm input {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid var(--dsh-border-color, rgba(127, 127, 127, 0.35));
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  min-width: 0;
+}
+
+.addForm input::placeholder {
+  opacity: 0.5;
+}
+
+.submit {
+  grid-column: 2;
+  justify-self: end;
+  border: 1px solid var(--dsh-border-color, rgba(127, 127, 127, 0.35));
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 10px;
+  cursor: pointer;
+}

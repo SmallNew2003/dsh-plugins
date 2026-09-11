@@ -1,0 +1,10 @@
+# >>> Comet managed project state >>>
+!/.comet/
+/.comet/*
+!/.comet/config.yaml
+# <<< Comet managed project state <<<
+
+node_modules/
+.pnpm-store/
+lib/
+*.tsbuildinfo
