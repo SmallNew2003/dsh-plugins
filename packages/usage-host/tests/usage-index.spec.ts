@@ -1,7 +1,12 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, writeFile: vi.fn(actual.writeFile) }
+})
 import { emptyBuckets, foldSessionUsage, type RawUsageEvent } from '../src/fold-usage.ts'
 import { entryOf, loadIndex, saveIndexAtomic, type UsageIndexFile } from '../src/usage-index.ts'
 
@@ -20,6 +25,7 @@ describe('usage index', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'usage-index-'))
     path = join(dir, 'nested', 'index.json')
+    vi.mocked(writeFile).mockClear()
   })
 
   afterEach(async () => {
@@ -68,6 +74,15 @@ describe('usage index', () => {
     const files = await readdir(join(dir, 'nested'))
     expect(files).toEqual(['index.json'])
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(index)
+  })
+
+  it('writes each save to a unique tmp filename', async () => {
+    const index: UsageIndexFile = { version: 1, normalizerVersion: 'v1:abc', sessions: {} }
+    await saveIndexAtomic(path, index)
+    await saveIndexAtomic(path, index)
+    const written = vi.mocked(writeFile).mock.calls.map((call) => String(call[0]))
+    expect(written.length).toBe(2)
+    expect(new Set(written).size).toBe(written.length)
   })
 
   it('omits the title field when no title is given', () => {

@@ -52,9 +52,14 @@ export function loadIndex(path: string, normalizerVersion: string): UsageIndexFi
   return { version: 1, normalizerVersion, sessions: candidate.sessions }
 }
 
+// Monotonic per-process counter so concurrent saves never share one tmp file
+// (pid alone collides between overlapping saves, e.g. dispose() mid-scan
+// followed by summary(), or two UsageService instances on the same path).
+let tmpSequence = 0
+
 export async function saveIndexAtomic(path: string, index: UsageIndexFile): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
-  const tmp = path + '.tmp-' + String(process.pid)
+  const tmp = `${path}.tmp-${String(process.pid)}-${String(++tmpSequence)}`
   await writeFile(tmp, JSON.stringify(index))
   await rename(tmp, path)
 }
