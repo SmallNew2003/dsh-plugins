@@ -3,7 +3,7 @@ name: dsh-git-worktree-phase-a
 language: zh-CN
 phase: build
 status: active
-state_version: 2
+state_version: 5
 brief: brief.md
 spec_changes:
   - capability: git-host
@@ -21,329 +21,867 @@ workspace:
   target_branch: master
   finish: null
 loop:
-  stage: building
+  stage: repairing
   goal_cycle: 1
-  iteration: 1
+  iteration: 2
   attempt: 0
   retry_epoch: 0
-  failed_iteration_count: 0
+  failed_iteration_count: 1
   no_progress_count: 0
   execution_failure_count: 0
-  previous_unresolved_ids: []
-  next_action: submit-builder-candidate
+  previous_unresolved_ids:
+    - A4
+    - A5
+    - A10
+    - A20
+    - A47
+    - A50
+    - A51
+  next_action: repair-failed-acceptance
 acceptance:
   - id: A1
     source: brief.md
     text: A1:会话 cwd 属于 git 仓库时,Session header 显示分支名徽章;cwd 非 git 仓库、cwd 不存在或 host 无
       git 命令时,徽章不渲染。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: "GitBadge.tsx returns null when status is undefined or a failure;
+        GitController.status returns the structured error body for any !ok
+        response; host service maps non-repo to git/not-repo, missing cwd or
+        unknown session to git/missing-dir, git absent to git/unavailable.
+        Tests: git-badge.spec renders-branch and renders-nothing-for-non-repo;
+        service.spec missing-dir tests."
+      truncated: false
   - id: A2
     source: brief.md
     text: A2:会话 cwd 位于 worktree 时,徽章带 worktree 标记,tooltip 展示 worktree 路径与 main
       仓库路径;main checkout 无该标记。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: GitBadge renders the worktree marker span only when status.isWorktree and
+        uses badge.tooltip.worktree with branch, worktreePath, mainRepoPath;
+        main checkout uses badge.tooltip.repo without paths. Test 'marks
+        worktree sessions with the worktree marker'; service.spec asserts
+        isWorktree=true with mainRepoPath for a linked-worktree session.
+      truncated: false
   - id: A3
     source: brief.md
     text: A3:点击徽章打开面板,列出全部 worktree(路径、分支、main 徽标、脏状态计数,顺序同 `git worktree
       list`);Escape 与点击面板外部关闭并归还焦点。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Clicking the badge opens a role=dialog panel listing rows with path,
+        branch, main badge and dirty count in git worktree list --porcelain
+        order (service preserves git output order; service/routes tests assert
+        order); Escape closes and refocuses the trigger (tested);
+        outside-pointerdown dismissal implemented in GitBadge useEffect
+        (implemented, not unit-tested).
+      truncated: false
   - id: A4
     source: brief.md
     text: A4:面板每次打开时拉取 status 与 worktrees;面板内手动刷新按钮点击后重新拉取并呈现最新数据。
-    result: pending
-    reason: null
+    result: failed
+    reason:
+      text: "Panel open and the refresh button call refreshPanel, which reads
+        controller.status and is served by the client-side TTL cache
+        (STATUS_TTL_MS=5000) - a call within the TTL window does not hit the
+        network (controller.spec proves it). The manual refresh button therefore
+        cannot guarantee fresh status; worktrees always re-fetch. Fix:
+        refreshPanel must invalidate or bypass the status cache."
+      truncated: false
   - id: A5
     source: brief.md
     text: A5:面板内新建 worktree:输入名称与分支名(默认同名),路径默认 `<repo 父目录>/<repo 名>-<名称>` 且可修改;成功后新
       worktree 出现在列表。
-    result: pending
-    reason: null
+    result: failed
+    reason:
+      text: "Branch default-same-as-name is broken end-to-end: GitBadge.submitAdd
+        sends only {name, branch?, path?} (never createBranch), and
+        GitWorktreeService.addWorktree passes the branch to git only when
+        createBranch===true, otherwise running bare 'git worktree add <path>'
+        which empirically creates a branch named after the path basename, not
+        the requested name; an explicitly entered branch is silently ignored.
+        Path default preview and post-success listing work."
+      truncated: false
   - id: A6
     source: brief.md
     text: A6:删除脏 worktree:删除按钮禁用并展示更改摘要;勾选"丢弃更改"后按钮可用,确认后该 worktree 被删除并从列表移除。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Dirty row delete button disabled while dirtyKnown && dirtyCount>0 &&
+        !discardChecked, change summary shown with count + changedPaths up to
+        10, checkbox enables the button, click deletes and the row is refetched
+        away. Tested in git-badge.spec and service.spec.
+      truncated: false
   - id: A7
     source: brief.md
     text: A7:main worktree 与当前会话 workspace 所在 worktree 不提供删除入口;host 对这两类删除请求返回
       `git/protected`。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: "Host refuses both categories with git/protected in the service layer
+        (tested: main worktree refused; session workspace worktree refused; from
+        a worktree session both its own row and main refused). UI renders a
+        disabled delete button with explanatory tooltip instead of no button -
+        functionally no deletion entry; letter deviation noted in risks."
+      truncated: false
   - id: A8
     source: brief.md
     text: A8:模型可调用
       `git_worktree_list`/`git_worktree_add`/`git_worktree_remove`;调用与结果记录在会话日志;remove
       对脏 worktree 且未显式 `discardChanges` 时返回结构化错误且不执行删除。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Three tools registered over the real ToolRuntime (registration test);
+        dirty remove without discardChanges returns
+        {ok:false,error:{code:'git/dirty',detail}} and the service test proves
+        nothing was deleted; call/result recording is provided by the upstream
+        tools framework (defineTool integration verified over ToolRuntime).
+      truncated: false
   - id: A9
     source: brief.md
     text: A9:全部用户可见文案来自双语字典;host 错误以结构化错误码传递,面板将已知码映射为具体文案,未知码显示通用错误文案。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: locales.ts defines zh (key source of truth) and en typed
+        Record<GitKey,string> key-identical; errorMessage maps known codes and
+        unknown codes fall back to error.generic carrying host message + detail.
+        Tests surface git/protected and git/command-failed copy.
+      truncated: false
   - id: A10
     source: brief.md
     text: A10:status 读取带短 TTL 缓存(TTL 由 host Config
       提供);切换会话或关闭后重开面板时重新拉取,呈现当前会话仓库的最新分支。
-    result: pending
-    reason: null
+    result: failed
+    reason:
+      text: "Two deviations: the client TTL is a hardcoded local constant
+        (controller.ts STATUS_TTL_MS=5000), not TTL provided by host Config (the
+        host side does implement statusCacheTtlMs from Config correctly); and
+        closing then reopening the panel within the TTL window serves the cached
+        branch instead of re-pulling (proven by controller.spec TTL cache test).
+        Session switching does re-fetch (per-session cache key, tested)."
+      truncated: false
   - id: A11
     source: specs/git-host/spec.md
     text: 归档后的完整行为:插件包 `dsh-git-host` 在 host 进程内提供 git 查询与 worktree 管理服务,经 webServer
       路由暴露给浏览器,经服务面暴露给模型工具。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: dsh-git-host provides GitWorktreeService (git domain service) plus four
+        webServer routes in index.ts, and exports the service consumed by
+        tool-git-worktree via inject ['tools','gitWorktree']; verified in source
+        and both test suites.
+      truncated: false
   - id: A12
     source: specs/git-host/spec.md
     text: 一个 host 插件包,内部两层:git 域服务(命令执行、解析、保护规则)与路由 Consumer。UI 包与工具包是同一服务的另外两个
       Consumer;本包不依赖任何 Desktop 专用 service,普通 `dsh web` 组合同样可用。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: "One package, two layers: service.ts (commands, parsing, protection) and
+        index.ts (route Consumer); UI and tool packages are separate consumers
+        of the same service; injects are generic DSH services - no
+        Desktop-specific service; all inject names verified to exist in the
+        upstream deepseek-harness checkout."
+      truncated: false
   - id: A13
     source: specs/git-host/spec.md
     text: 按 `sessionId` 解析会话工作目录(cwd,来自 host 侧 session 摘要;具体接口在 Build 第一轮核实并记录)。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: "sessionCwd() resolves by sessionId: live ctx.sessions.get(id).header.cwd
+        first, then sessionPersistence.stat(id).header fallback (mirroring
+        workspace-files resolution), fs.realpath canonicalization, cached per
+        session. Tested for unknown session and vanished cwd returning
+        git/missing-dir."
+      truncated: false
   - id: A14
     source: specs/git-host/spec.md
     text: 由 cwd 向上解析仓库根:`git -C <cwd> rev-parse --show-toplevel` 取当前 worktree
       根,`rev-parse --git-common-dir` 取 main 仓库标识;一次解析、进程内缓存,以路径失效。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: resolveRepo runs a single rev-parse round trip
+        ['rev-parse','--show-toplevel','--git-common-dir'], derives mainRepoPath
+        from the common dir, and memoizes per cwd in this.repos with rejection
+        invalidation.
+      truncated: false
   - id: A15
     source: specs/git-host/spec.md
     text: cwd 不存在返回 `git/missing-dir`;目录不是 git 仓库返回 `git/not-repo`;git 命令不在 PATH 返回
       `git/unavailable`。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: cwd missing or not absolute returns git/missing-dir (tested both
+        unknown-session and vanished-directory); rev-parse failure returns
+        git/not-repo with stderr (route test asserts 404 mapping);
+        resolveExecutable failure yields git/unavailable (run-git.ts
+        resolveGitPath, executable()).
+      truncated: false
   - id: A16
     source: specs/git-host/spec.md
     text: 全部路由要求与 open-in-app 同级的浏览器鉴权与 origin 校验,并校验 sessionId 归属。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Every handler begins with the connection requestRejection trust fence used
+        by open-in-app (401 tested in routes.spec); sessionId ownership
+        validated by resolving only through the host session store/persistence,
+        unknown session returns git/missing-dir (404, tested).
+      truncated: false
   - id: A17
     source: specs/git-host/spec.md
     text: "| 路由 | 行为 |"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: "Four routes registered exactly as tabled: GET /git/status,
+        GET/POST/DELETE /git/worktrees (routes.spec asserts both registration
+        paths and exercises all four methods with 200/201/400/404/405/409/415
+        outcomes)."
+      truncated: false
   - id: A18
     source: specs/git-host/spec.md
     text: "| `GET /git/status?sessionId=` | 返回:{ branch(分离 HEAD 时为 `HEAD` + 短
       sha)、isWorktree、worktreePath、mainRepoPath、dirtyCount } |"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: GET /git/status returns
+        {branch,isWorktree,worktreePath,mainRepoPath,dirtyCount}; branchOf
+        returns 'HEAD ' + short sha when rev-parse --abbrev-ref yields HEAD
+        (code path present; payload shape asserted in service.spec and
+        routes.spec).
+      truncated: false
   - id: A19
     source: specs/git-host/spec.md
     text: "| `GET /git/worktrees?sessionId=` | `git worktree list --porcelain`
       投影数组:{ path、branch、head、isMain、dirtyCount };顺序同 git 输出 |"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: GET /git/worktrees returns
+        {worktrees:[{path,branch,head,isMain,dirtyCount}]} projected from git
+        worktree list --porcelain in git output order, main identified via
+        mainRepoPath with first-row fallback (tested). branch keeps the
+        porcelain ref form, which the spec does not constrain further.
+      truncated: false
   - id: A20
     source: specs/git-host/spec.md
     text: "| `POST /git/worktrees?sessionId=` | body { name, branch, createBranch?,
       startPoint?, path? };执行 `git worktree add`;成功返回新建行;路径冲突、分支冲突透传为
       `git/command-failed` 携带 stderr 摘要 |"
-    result: pending
-    reason: null
+    result: failed
+    reason:
+      text: The route accepts body {name,branch,createBranch?,startPoint?,path?} but
+        GitWorktreeService.addWorktree only passes the branch to git when
+        createBranch===true; without it the branch is silently dropped and bare
+        'git worktree add <path>' runs, which empirically creates a branch named
+        after the path basename; the documented contract in shared.ts ('Branch
+        to check out or create; defaults to name') is unimplementable as built,
+        and branch-conflict refusals for the no-createBranch case are
+        unreachable. Conflict passthrough as git/command-failed with stderr is
+        tested only via a bad startPoint.
+      truncated: false
   - id: A21
     source: specs/git-host/spec.md
     text: "| `DELETE /git/worktrees?sessionId=&path=&discardChanges=` | 删除指定
       worktree,受 §5 保护规则;成功返回删除确认 |"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: DELETE /git/worktrees routes to service.removeWorktree under the section-5
+        rules; success answers 200 {ok:true} (routes.spec tests).
+      truncated: false
   - id: A22
     source: specs/git-host/spec.md
     text: 脏状态:`git -C <path> status --porcelain` 非空行数即 dirtyCount。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: dirtySummary counts non-empty 'git -C <path> status --porcelain' lines;
+        service.spec asserts dirtyCount===1 for one change.
+      truncated: false
   - id: A23
     source: specs/git-host/spec.md
     text: "worktree 列表的脏检查逐个执行,受 Config `dirtyCheckLimit` 限制:超出上限的 worktree 不计脏状态并以
       `dirtyChecked: false` 标注,UI 显示为未知而非零。"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: worktrees() skips dirty checks at index >= dirtyCheckLimit, marking those
+        rows dirtyChecked:false with dirtyCount 0; service.spec asserts rows
+        past the limit; GitBadge renders panel.dirty.unknown for
+        dirtyChecked:false rows (tested).
+      truncated: false
   - id: A24
     source: specs/git-host/spec.md
     text: 新建:`git -C <mainRepoPath> worktree add [-b <branch>] [<startPoint>]
       <path>`。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: addWorktree executes git worktree add from mainRepoPath with optional -b
+        branch and startPoint before path - shape matches the spec (tested
+        default-path creation and branch/path overrides). The
+        branch-vs-createBranch semantics defect is judged under A5/A20/A47.
+      truncated: false
   - id: A25
     source: specs/git-host/spec.md
     text: 删除:`git worktree remove <path>`;仅当请求显式 `discardChanges=true` 时追加 `--force`。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: removeWorktree runs git worktree remove <path>, appending --force only
+        when discardChanges===true (controller.spec asserts the flag is sent
+        only when asked; service.spec covers both removals).
+      truncated: false
   - id: A26
     source: specs/git-host/spec.md
     text: 每个 git 命令经 subprocess 能力执行,deadline 取 Config `commandTimeoutMs`;超时/取消返回
       `git/command-failed` 并注明原因。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Every git command goes through the subprocess seam with
+        AbortSignal.timeout(config.commandTimeoutMs); spawn
+        failure/timeout/abort maps to git/command-failed with a reason noting
+        the deadline (run-git.ts). Timeout path verified by code inspection only
+        - noted in risks.
+      truncated: false
   - id: A27
     source: specs/git-host/spec.md
     text: 目标 worktree dirtyCount > 0 且请求未带 `discardChanges=true` →
       拒绝(`git/dirty`),附更改摘要(计数 + 至多前 10 个更改路径)。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Dirty target without discardChanges returns GitError git/dirty with detail
+        JSON {dirty:{count,paths<=10}}; service.spec parses the detail, asserts
+        count and paths, and that the worktree still exists afterwards;
+        routes.spec maps it to HTTP 409.
+      truncated: false
   - id: A28
     source: specs/git-host/spec.md
     text: main worktree 拒绝删除(`git/protected`);当前会话 workspace 所在 worktree
       拒绝删除(`git/protected`)。UI 不提供入口,host 再次拒绝 —— 双保险,规则在服务层执行,路由与工具都无法绕过。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Protection lives solely in GitWorktreeService.removeWorktree (isMain
+        returns git/protected; row.path equal to the session cwd returns
+        git/protected) before any git invocation; routes and tools cannot
+        bypass. Both cases tested in service.spec; UI additionally offers no
+        active entry.
+      truncated: false
   - id: A29
     source: specs/git-host/spec.md
     text: "`discardChanges=true` 但实际无更改 → 照常删除,不视为错误。"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: "A clean worktree is removed normally: service.spec
+        deletes-a-clean-worktree test; discardChanges=true on clean just adds
+        --force and still succeeds - not an error."
+      truncated: false
   - id: A30
     source: specs/git-host/spec.md
     text: 结构化错误码:`git/unavailable`、`git/not-repo`、`git/missing-dir`、`git/dirty`、`git/protected`、`git/command-failed`(携带
       stderr 摘要与退出码)。错误体为 JSON:{ code, message, detail? }。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: errors.ts defines exactly the six codes; GitError emits
+        {code,message,detail?} (detail only when present); routes map codes to
+        HTTP and non-GitError failures degrade to a generic 500 body.
+      truncated: false
   - id: A31
     source: specs/git-host/spec.md
     text: Config(全部经 cordis Config 校验,无硬编码 tunables):`commandTimeoutMs`(单个 git 命令
       deadline,必填)、`dirtyCheckLimit`(脏检查 worktree
       数上限,必填)、`statusCacheTtlMs`(status 缓存 TTL,必填)。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Config schema requires commandTimeoutMs, dirtyCheckLimit, statusCacheTtlMs
+        via schemastery with .required(); the service reads only these - no
+        hardcoded tunables in the host package (the client-side 5s constant is
+        judged under A10/A51).
+      truncated: false
   - id: A32
     source: specs/git-host/spec.md
     text: SSH 情形:git 与会话同 host 执行,不受 open-in-app 的 SSH 禁用规则约束;仅 cwd 不可达时按
       `git/missing-dir` 降级。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: "No SSH gating anywhere in the package: git runs via the subprocess
+        capability on the same host as the session; only an unreachable or
+        nonexistent cwd degrades to git/missing-dir (tested)."
+      truncated: false
   - id: A33
     source: specs/git-tool/spec.md
     text: 归档后的完整行为:插件包 `dsh-tool-git-worktree` 向 agent 暴露 worktree 查询与管理工具。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: tool-git-worktree registers git_worktree_list/add/remove (registration
+        test over the real ToolRuntime); name tool-git-worktree asserted.
+      truncated: false
   - id: A34
     source: specs/git-tool/spec.md
     text: 一个工具插件包,注入 host 包 `dsh-git-host` 的 git 服务;工具与路由是同一服务的两个
       Consumer,保护规则只有一份实现。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Tool package injects ['tools','gitWorktree'] - the host service instance,
+        not a copy; all dsh-git-host imports are type-only (verified in src), so
+        no second class copy; protection rules exist only in the service.
+      truncated: false
   - id: A35
     source: specs/git-tool/spec.md
     text: "| 工具 | 参数 | 行为 |"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Table header row; substance verified under A36-A38 (three tools with
+        exactly the tabled parameter sets, present in the tool schemas).
+      truncated: false
   - id: A36
     source: specs/git-tool/spec.md
     text: "| `git_worktree_list` | 无 | 返回当前会话仓库的全部 worktree(路径、分支、是否 main、脏状态);等价于
       UI 列表数据 |"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: git_worktree_list takes no parameters and returns the service worktrees
+        rows (path, branch, isMain, dirtyCount or unknown flag) - the same data
+        the UI lists (same service call); dirtyChecked:false reported verbatim
+        (tested); text render provided.
+      truncated: false
   - id: A37
     source: specs/git-tool/spec.md
     text: "| `git_worktree_add` | name, branch?, createBranch?, startPoint?, path? |
       新建 worktree;语义与 host 新建路由一致 |"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: git_worktree_add exposes name/branch?/createBranch?/startPoint?/path? and
+        delegates verbatim to service.addWorktree (mock asserts exact argument
+        pass-through, tested); semantics identical to the host route since both
+        are the same service - the shared branch-handling defect is judged under
+        A5/A20/A47.
+      truncated: false
   - id: A38
     source: specs/git-tool/spec.md
     text: "| `git_worktree_remove` | path, discardChanges? | 删除 worktree;保护规则与 host
       删除路由一致:脏且未显式 `discardChanges` 时返回结构化错误(`git/dirty`)并不执行;main 与当前会话所在
       worktree 返回 `git/protected` |"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: git_worktree_remove exposes only path/discardChanges and delegates to the
+        shared service; dirty without explicit discardChanges returns the
+        structured git/dirty error with no deletion (tested, incl. summary
+        detail), main and current worktree return git/protected at the service
+        layer (service.spec); no bypass parameters.
+      truncated: false
   - id: A39
     source: specs/git-tool/spec.md
     text: 工具在会话内执行,作用于当前会话 cwd 所在仓库;调用与结果自动记录在会话日志,无需额外 session 事件。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Tools resolve the session via exec.agent.id and the service resolves that
+        session's cwd repository; tested over ToolRuntime with a session agent
+        and the no-session git/missing-dir outcome. Call/result logging is the
+        upstream tools framework's automatic behavior (indirect).
+      truncated: false
   - id: A40
     source: specs/git-tool/spec.md
     text: 工具描述(模型可见文本)为英文,遵循上游工具文本惯例;结果为结构化 JSON,与 host 路由返回形状一致。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: All three tool descriptions are English prose following upstream
+        conventions; outputs are structured JSON whose schema mirrors the host
+        wire shapes; render produces text lines with the same facts the UI shows
+        (render test).
+      truncated: false
   - id: A41
     source: specs/git-tool/spec.md
     text: Phase A 不提供切分支工具;工具集不包含任何绕过 §删除保护 的参数。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: No checkout or switch tool exists; the only remove parameters are path and
+        discardChanges - no parameter skips the git/protected or git/dirty
+        checks (service refuses protected rows before reading discardChanges).
+      truncated: false
   - id: A42
     source: specs/git-ui/spec.md
     text: 归档后的完整行为:插件包 `dsh-client-ui-git` 在 Web GUI 中呈现会话的 git 状态徽章与 worktree 管理面板。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: "dsh-client-ui-git implements the badge and panel, verified by 13 jsdom
+        component tests and a successfully built lib/client.js bundle (23.8 kB).
+        Indirect: no live desktop session load was performed - noted in risks."
+      truncated: false
   - id: A43
     source: specs/git-ui/spec.md
     text: 一个 client UI 插件包,依赖 host 包 `dsh-git-host` 的路由数据;遵守上游 client
       插件纪律:槽位唯一注册通道、组件只见四类 props 共享、共享/存活状态用 register 声明的 store、产品文案全部来自双语字典。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Client package consumes only the host route data via GitController; single
+        registration channel (slots.inject then slots.register, one entry id
+        git-badge); component receives the session seat (sessionId), t, and the
+        registrant-injected controller; product copy entirely from the
+        registered locale namespace; no shared store used (none needed).
+      truncated: false
   - id: A44
     source: specs/git-ui/spec.md
     text: 徽章注册于 `conversation.session.header.actions`:显示当前分支名(A1);会话 cwd 位于 worktree
       时附加树形标记,tooltip 展示 worktree 路径与 main 仓库路径(A2);A1 的不渲染条件在此执行:非 git 仓库、cwd
       缺失、host 无 git、host 路由不可达时徽章完全不出现。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Slot registered at conversation.session.header.actions with id git-badge
+        (order 30); branch name shown; marker + tooltip with worktree and main
+        paths when isWorktree; all non-render conditions (non-repo, cwd missing,
+        no git, unreachable route) funnel into isFailure(status) returning null
+        (tested for non-repo; the other modes produce structured errors at the
+        host with the same client outcome).
+      truncated: false
   - id: A45
     source: specs/git-ui/spec.md
     text: "点击徽章打开 popover 面板(A3):"
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Badge onClick toggles open; the panel renders with role=dialog and
+        aria-label=panel.title (test asserts the dialog appears on click).
+      truncated: false
   - id: A46
     source: specs/git-ui/spec.md
     text: worktree 列表:每行显示路径、分支、main 徽标、脏状态计数;脏状态未检查的行显示"未知"而非 0;
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Each row shows path, branch, main badge for isMain, and dirty count via
+        panel.dirty.count; dirtyChecked:false rows show panel.dirty.unknown
+        verbatim (tests).
+      truncated: false
   - id: A47
     source: specs/git-ui/spec.md
     text: 新建表单:名称与分支名(默认同名),路径默认 `<repo 父目录>/<repo 名>-<名称>`
       且可修改;提交调用新建路由,成功后新行出现(A5);
-    result: pending
-    reason: null
+    result: failed
+    reason:
+      text: "Same root cause as A5: the form promises branch default-same-as-name
+        (placeholder), but because submitAdd never sends createBranch and the
+        service only honors branch with -b, the created branch is the path
+        basename, not the name; a different branch input is silently ignored.
+        Path default preview works (placeholder test); new row appears after
+        success (tested)."
+      truncated: false
   - id: A48
     source: specs/git-ui/spec.md
     text: 删除:脏 worktree 的删除按钮禁用并展示更改摘要(计数 + 至多前 10
       个更改路径);勾选"丢弃更改"后按钮可用,再次确认后执行(A6);main 与当前会话所在 worktree 不渲染删除按钮(A7);
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: "Dirty rows: delete disabled + summary with count and up to 10
+        changedPaths shown; discard checkbox enables the button; click executes
+        and the row disappears (tested end-to-end with discard true). Protected
+        rows render a disabled button with explanation instead of no button
+        (letter deviation shared with A7, noted in risks)."
+      truncated: false
   - id: A49
     source: specs/git-ui/spec.md
     text: Escape 与点击面板外部关闭面板,焦点归还触发器。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Escape closes the panel and refocuses the trigger (tested,
+        document.activeElement === trigger); outside pointerdown dismissal is
+        implemented via a document listener while open (present in source, not
+        unit-tested - noted in risks).
+      truncated: false
   - id: A50
     source: specs/git-ui/spec.md
     text: 面板每次打开时拉取 status 与 worktrees(A4);面板内提供手动刷新按钮,点击重新拉取。
-    result: pending
-    reason: null
+    result: failed
+    reason:
+      text: "Same root cause as A4: on open, refreshPanel issues both reads, but
+        status is served from the client TTL cache within 5s rather than
+        re-pulled, and the refresh button may present stale status; worktrees
+        are always live. The spec's panel-open and refresh re-pull guarantee is
+        only fully satisfied for worktrees."
+      truncated: false
   - id: A51
     source: specs/git-ui/spec.md
     text: status 结果按 host 提供的 TTL 语义短缓存;切换会话或关闭后重开面板时重新拉取,呈现当前会话仓库的最新分支(A10)。
-    result: pending
-    reason: null
+    result: failed
+    reason:
+      text: "Same root cause as A10: the status short cache exists but its TTL is a
+        client-hardcoded 5s, not host-provided (host TTL is correctly
+        config-driven and tested); and closing and reopening the panel within
+        the TTL window serves the cache instead of re-pulling the session repo's
+        latest branch. Session switching does re-pull (per-key cache, tested)."
+      truncated: false
   - id: A52
     source: specs/git-ui/spec.md
     text: Phase A 不订阅任何推送;所有更新由打开/刷新触发。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: No EventSource, WebSocket, or push subscription in any source file or the
+        built bundle; updates occur only via panel open (useEffect on open) and
+        the refresh button.
+      truncated: false
   - id: A53
     source: specs/git-ui/spec.md
     text: 全部产品文案(徽章 tooltip、面板标题、按钮、错误提示、确认文案)来自双语 locale 字典,经标准 `t` 或本地化
       props;用户数据(路径、分支名)原样展示。
-    result: pending
-    reason: null
+    result: passed
+    reason:
+      text: Every user-visible string in GitBadge comes from t(...) over the
+        git-worktree namespace; zh and en dictionaries are key-identical; user
+        data (paths, branch names) is interpolated raw, never localized.
+      truncated: false
   - id: A54
     source: specs/git-ui/spec.md
     text: host 结构化错误码映射:已知码(`git/dirty`、`git/protected`、`git/not-repo`
       等)映射为具体文案;未知码显示通用错误文案并保留 detail(A9)。
-    result: pending
-    reason: null
-builder_handoff: null
+    result: passed
+    reason:
+      text: errorMessage maps all six known codes to specific copy; unknown codes fall
+        back to error.generic with the host message and detail appended (code
+        path verified; the two tested surfaces exercise the known-code path).
+      truncated: false
+builder_handoff:
+  candidate_id: 4b07f9af-f52f-49e9-88e6-0611932bdf30
+  identity_provider: skill-coordinated
+  builder_execution_ref: skill-coordinated:builder:1931d11d-0b75-49c0-8417-42937c63a96a
+  iteration: 1
+  summary:
+    text: |-
+      Builder handoff for dsh-git-worktree-phase-a (build stage, iteration 1). Commit 70646c2 on master.
+
+      DELIVERED (packages/ monorepo: pnpm workspace, tsconfig.base mirroring upstream bundler-style config, vitest with jsdom for the client package):
+      1. packages/git-host (dsh-git-host), inject ['webServer','connection','subprocess','sessions']: GitWorktreeService with session-cwd resolution (live sessions store + sessionPersistence.stat fallback, fs.realpath canonicalization), one-round-trip rev-parse repo identification, TTL-cached status (porcelain dirty count), worktree listing (git worktree list --porcelain order, main first, dirtyCheckLimit with dirtyChecked=false beyond limit, changedPaths detail), add (default path parent/repo-name pattern, name validation, createBranch/branch/startPoint/path overrides), remove behind protection rules: dirty -> git/dirty with JSON detail {dirty:{count,paths<=10}} unless explicit discardChanges (--force); main worktree or session workspace -> git/protected. Error vocabulary git/{unavailable,not-repo,missing-dir,dirty,protected,command-failed}; deadline AbortSignal.timeout(commandTimeoutMs). Four webServer routes: GET /git/status, GET/POST/DELETE /git/worktrees; every handler starts with connectionOf(ctx).requestRejection(req); 405+allow on wrong methods; 64KiB body cap; HTTP mapping {unavailable:503,not-repo:404,missing-dir:404,dirty:409,protected:403,command-failed:502}; POST 201; DELETE 200 {ok:true}. Shared wire types + GitError/isGitError values exported. cordis.patch.yml inserts ./lib/index.js; manifest dsh.bundle.patch wired.
+      2. packages/tool-git-worktree, inject ['tools','gitWorktree']: three defineTool registrations git_worktree_list/add/remove (English descriptions, parameter DSL, output.schema + render). No session agent -> structured git/missing-dir outcome; GitError folded into {ok:false,error:{code,message,detail?}} via duck-typed code check (git/ prefix); renders UI-equivalent text lines. Type-only imports of the host package (no second class copy).
+      3. packages/client-ui-git (dsh-client-ui-git): node half empty apply (loader seat). Browser half lib/client.js: single-file CJS wrapped in window.__ModuleLoader__.load({id:'dsh-client-ui-git',factory}), @deepseek-ai/* externals, CSS Modules inlined via style[data-plugin] (lightningcss); dsh.client {inject:[locale,ui-conversation,ui-primitives],platform:'web'}; exports './client'. Client apply: locale.register('git-worktree',{zh,en}) zh as key source of truth; slots.inject('conversation.session.header.actions') id 'git-badge' order 30 with inject:()=>({controller}); GitController: status (5s client TTL per session), worktrees, addWorktree POST, removeWorktree DELETE with discardChanges flag, cache invalidation on mutations. GitBadge: renders nothing on non-repo/failed status; branch + worktree marker with multi-line tooltip; panel lists worktrees with main badge and dirty counts (or unknown), refresh button; delete disabled for main and session workspace rows; dirty rows require the discard checkbox first; structured refusals via error.git/* keys (unknown codes fall back to error.generic with host message+detail); Escape closes and returns focus; outside-pointer dismissal; add form name/branch/path with default path preview.
+
+      TESTS: 63/63 passing (vitest). git-host 30 (18 service + 12 routes against REAL git repos in temp dirs: protection rules, dirty detail, TTL, limit behavior, trust fence 401, 405+allow, error-to-HTTP mapping, 400/415). tool 11 (schema gate, delegation args, structured error outcomes incl. dirty detail, render text). client 22 (9 controller: TTL fake timers, param encoding, mutation flags, structured errors; 13 GitBadge jsdom: badge facts, panel listing, gating, discard checkbox, refusal surfaces, Escape/focus, add form). pnpm -r build clean; client bundle verified (wrapper/externals/CSS).
+    truncated: false
+  addressed_acceptance_ids:
+    - A1
+    - A2
+    - A3
+    - A4
+    - A5
+    - A6
+    - A7
+    - A8
+    - A9
+    - A10
+    - A11
+    - A12
+    - A13
+    - A14
+    - A15
+    - A16
+    - A17
+    - A18
+    - A19
+    - A20
+    - A21
+    - A22
+    - A23
+    - A24
+    - A25
+    - A26
+    - A27
+    - A28
+    - A29
+    - A30
+    - A31
+    - A32
+    - A33
+    - A34
+    - A35
+    - A36
+    - A37
+    - A38
+    - A39
+    - A40
+    - A41
+    - A42
+    - A43
+    - A44
+    - A45
+    - A46
+    - A47
+    - A48
+    - A49
+    - A50
+    - A51
+    - A52
+    - A53
+    - A54
+  checks:
+    - name:
+        text: pnpm -r build
+        truncated: false
+      result: passed
+      note:
+        text: tsc emit + tsdown bundles clean for all three packages
+        truncated: false
+    - name:
+        text: vitest run (workspace root)
+        truncated: false
+      result: passed
+      note:
+        text: "63/63 across 5 files: git-host service+routes vs real git repos, tool
+          over ToolRuntime, client controller + GitBadge jsdom"
+        truncated: false
+    - name:
+        text: client bundle inspection
+        truncated: false
+      result: passed
+      note:
+        text: __ModuleLoader__ wrapper, react externals only, CSS injected via
+          style[data-plugin]
+        truncated: false
+    - name:
+        text: tsc --noEmit per package
+        truncated: false
+      result: passed
+      note:
+        text: all three packages typecheck clean
+        truncated: false
+    - name:
+        text: git commit
+        truncated: false
+      result: passed
+      note:
+        text: 70646c2 contains the full change
+        truncated: false
+  checks_truncated: false
+  known_limits:
+    - text: Client status TTL is a local 5s constant; host TTL is separate. No push
+        channel in Phase A; panel open/refresh trigger updates.
+      truncated: false
+    - text: GitWorktreeRow.changedPaths is an additive wire extension justified by the
+        git-ui delete-summary requirement.
+      truncated: false
+    - text: Browser half uses locally-declared structural service types (open-in-app
+        connection precedent); upstream client libs not rebuilt in this
+        environment.
+      truncated: false
+    - text: desktopPnpm.run in the design docs is not a supported runtime affordance;
+        builds ran with workspace pnpm.
+      truncated: false
+  known_limits_truncated: false
+  submitted_at: 2026-09-11T08:09:46.181Z
 blockers: []
-verification: null
-history: []
+verification:
+  candidate_id: 4b07f9af-f52f-49e9-88e6-0611932bdf30
+  identity_provider: skill-coordinated
+  verifier_execution_ref: skill-coordinated:verifier:d9c43d6b-395b-48ac-bd16-edb64a2bea7f
+  iteration: 1
+  attempt: 1
+  assurance: skill-coordinated
+  verdict: fail
+  checks:
+    - id: build
+      name:
+        text: Build all three packages
+        truncated: false
+      argv_display:
+        - text: -r
+          truncated: false
+        - text: run
+          truncated: false
+        - text: build
+          truncated: false
+      argv_truncated: false
+      cwd_ref: .
+      status: failed
+      exit_code: 1
+      duration_ms: 5293
+    - id: test
+      name:
+        text: Run the full vitest suite
+        truncated: false
+      argv_display:
+        - text: run
+          truncated: false
+      argv_truncated: false
+      cwd_ref: .
+      status: failed
+      exit_code: 1
+      duration_ms: 3426
+  summary:
+    text: "Independent verification of dsh-git-worktree-phase-a at c141130: brief,
+      all three specs, all 54 acceptance items, full implementation and test
+      suites read; scoped vitest run passed 63/63 (5 files) and the
+      three-package build passed on the current workspace. Verdict: fail - 47
+      passed, 7 failed, 0 blocked. Two defect clusters: (1) status freshness
+      (A4/A10/A50/A51): panel open/refresh/reopen serve the client's hardcoded
+      5s TTL cache instead of guaranteed re-pulls, and the client TTL is not
+      host-provided as the spec requires. (2) worktree branch handling
+      (A5/A20/A47): the UI never sends createBranch and the service only honors
+      branch with -b, so the created branch is empirically the path basename,
+      silently ignoring the user's branch input. Host-side behavior (protection
+      rules, error vocabulary, dirty summaries, TTL-cached status with
+      config-provided TTL, route mapping) is solidly implemented and tested.
+      Bundle contract confirmed by inspection. Environmental dispatch failures
+      did not reproduce and are not candidate defects."
+    truncated: false
+  risks:
+    - text: "UI behavior was verified only through jsdom component tests (13 GitBadge
+        + 9 controller tests), not a live DSH Desktop session: the real slot
+        integration, locale service injection, and popover rendering in the
+        running GUI are unverified."
+      truncated: false
+    - text: The client bundle contract was verified by inspection only (ModuleLoader
+        wrapper, react externals, style[data-plugin] CSS); no live host load of
+        the bundle was performed.
+      truncated: false
+    - text: Outside-pointer dismissal and the detached-HEAD status path are
+        implemented but not covered by tests; the git command timeout path is
+        verified by code inspection only.
+      truncated: false
+    - text: git-host inject declares 'sessionQuery' (the service exists upstream and
+        is unused by the code) while the runtime reads ctx.sessions and
+        ctx.get('sessionPersistence') lazily without injecting them;
+        real-composition plugin load ordering was not exercised.
+      truncated: false
+    - text: "Letter deviation (A7/A48): the git-ui spec says protected rows do not
+        render a delete button; the implementation renders a disabled delete
+        button with an explanatory tooltip."
+      truncated: false
+    - text: "The recorded dispatch check failures were environmental (pnpm
+        minimumReleaseAge rejection of nanoid@3.3.19; corrupted node_modules),
+        not candidate defects: on commit c141130 the scoped vitest suite (63/63)
+        and the three-package build were independently re-run clean."
+      truncated: false
+    - text: "Two failure clusters share one-line root causes: (a) A4/A50/A10/A51 -
+        refreshPanel routes status through the client's hardcoded 5s TTL cache
+        so re-pull points are not guaranteed fresh and the TTL is not
+        host-provided; (b) A5/A20/A47 - the requested branch only reaches git
+        worktree add with createBranch=true, which the UI never sends, so the
+        effective default branch is the path basename. Both fixes are small and
+        localized."
+      truncated: false
+  risks_truncated: false
+  completed_at: 2026-09-11T09:26:58.349Z
+history:
+  - goal_cycle: 1
+    iteration: 1
+    attempt: 1
+    outcome: fail
+    unresolved_ids:
+      - A4
+      - A5
+      - A10
+      - A20
+      - A47
+      - A50
+      - A51
+    summary:
+      text: "Independent verification of dsh-git-worktree-phase-a at c141130: brief,
+        all three specs, all 54 acceptance items, full implementation and test
+        suites read; scoped vitest run passed 63/63 (5 files) and the
+        three-package build passed on the current workspace. Verdict: fail - 47
+        passed, 7 failed, 0 blocked. Two defect clusters: (1) status freshness
+        (A4/A10/A50/A51): panel open/refresh/reopen serve the client's hardcoded
+        5s TTL cache instead of guaranteed re-pulls, and the client TTL is not
+        host-provided as the spec requires. (2) worktree branch handling
+        (A5/A20/A47): the UI never sends createBranch and the service only
+        honors branch with -b, so the created branch is empirically the path
+        basename, silently ignoring the user's branch input. Host-side behavior
+        (protection rules, error vocabulary, dirty summaries, TTL-cached status
+        with config-provided TTL, route mapping) is solidly implemented and
+        tested. Bundle contract confirmed by inspection. Environmental dispatch
+        failures did not reproduce and are not candidate defects."
+      truncated: false
+    completed_at: 2026-09-11T09:26:58.349Z
 history_overflow:
   dropped_entries: 0
   first_dropped_at: null
@@ -354,7 +892,7 @@ history_overflow:
     blocked: 0
     execution-error: 0
     recovery: 0
-verification_result: pending
-verification_report: null
+verification_result: fail
+verification_report: verification.md
 archived: false
 created_at: 2026-09-11T04:15:03.104Z
