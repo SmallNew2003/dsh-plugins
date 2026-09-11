@@ -11,8 +11,8 @@ export interface GitErrorBodyWire {
   readonly detail?: string
 }
 
-/** Client-side status cache lifetime; the host enforces its own TTL upstream. */
-const STATUS_TTL_MS = 5_000
+/** Fallback status-cache lifetime when the host payload omits its configured TTL. */
+const FALLBACK_STATUS_TTL_MS = 5_000
 
 /** Resolve the browser Host base with the connection carrier's null-origin fallback. */
 function hostBase(): string {
@@ -35,28 +35,35 @@ async function errorOf(response: Response): Promise<GitErrorBodyWire> {
 
 /**
  * One controller per plugin life: every Session header shares one truth.
- * Status reads are TTL-cached per session; listings and mutations always
- * hit the host. Phase A has no push channel: opening the panel and the
- * refresh button are the only update triggers.
+ * Badge status reads are TTL-cached with the host-configured TTL; the panel's
+ * guaranteed-fresh points (open, refresh button) force a re-pull, and listing
+ * or mutations always hit the host. Phase A has no push channel: opening the
+ * panel and the refresh button are the only update triggers.
  */
 export class GitController {
-  private readonly statusCache = new Map<string, { at: number; status: GitStatusPayload }>()
+  private readonly statusCache = new Map<string, { at: number; ttlMs: number; status: GitStatusPayload }>()
 
   constructor(private readonly fetcher: Fetch = (input, init) => fetch(input, init)) {}
 
   /**
-   * Status of the session repository, TTL-cached per session id.
+   * Status of the session repository, TTL-cached per session id. The cache
+   * lifetime is the host-configured TTL carried by the payload; `force` skips
+   * the cached read for the guaranteed-fresh re-pull points (panel open and
+   * the refresh button).
    * @returns the payload, or the structured error (badge then renders nothing).
    */
-  async status(sessionId: string): Promise<GitStatusPayload | GitErrorBodyWire> {
+  async status(sessionId: string, options: { readonly force?: boolean } = {}): Promise<GitStatusPayload | GitErrorBodyWire> {
     const cached = this.statusCache.get(sessionId)
-    if (cached !== undefined && Date.now() - cached.at < STATUS_TTL_MS) return cached.status
+    if (options.force !== true && cached !== undefined && Date.now() - cached.at < cached.ttlMs) return cached.status
     const response = await this.fetcher(new URL(GIT_STATUS_ROUTE + '?sessionId=' + encodeURIComponent(sessionId), hostBase()), {
       headers: { accept: 'application/json' },
     })
     if (!response.ok) return await errorOf(response)
     const payload = await response.json() as GitStatusPayload
-    this.statusCache.set(sessionId, { at: Date.now(), status: payload })
+    const ttlMs = typeof payload.statusCacheTtlMs === 'number' && payload.statusCacheTtlMs > 0
+      ? payload.statusCacheTtlMs
+      : FALLBACK_STATUS_TTL_MS
+    this.statusCache.set(sessionId, { at: Date.now(), ttlMs, status: payload })
     return payload
   }
 

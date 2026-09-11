@@ -90,7 +90,7 @@ describe('worktree panel', () => {
     expect(screen.getAllByText(t('panel.dirty.count', { count: 0 })).length).toBe(2)
   })
 
-  it('disables delete for the main worktree and the session workspace', async () => {
+  it('renders no delete button for the main worktree and the session workspace', async () => {
     const controller = new StubController(repoStatus({ worktreePath: '/repo-current' }), [
       wtRow({ path: '/repo', isMain: true }),
       wtRow({ path: '/repo-current' }),
@@ -98,11 +98,12 @@ describe('worktree panel', () => {
     ])
     render(<GitBadge {...props(controller)} />)
     fireEvent.click(await screen.findByRole('button'))
+    // Only the unprotected row offers a delete entry at all.
     const deletes = await screen.findAllByText(t('panel.delete'))
-    // Three rows, three delete buttons; the first two are protected.
-    expect((deletes[0] as HTMLButtonElement).disabled).toBe(true)
-    expect((deletes[1] as HTMLButtonElement).disabled).toBe(true)
-    expect((deletes[2] as HTMLButtonElement).disabled).toBe(false)
+    expect(deletes).toHaveLength(1)
+    expect((deletes[0] as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByText('/repo').closest('li')?.querySelector('button[class*="delete"]')).toBeNull()
+    expect(screen.getByText('/repo-current').closest('li')?.querySelector('button[class*="delete"]')).toBeNull()
   })
 
   it('requires the discard checkbox before deleting a dirty worktree', async () => {

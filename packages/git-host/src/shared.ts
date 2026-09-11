@@ -14,6 +14,8 @@ export interface GitStatusPayload {
   readonly mainRepoPath: string
   /** Uncommitted-change count of the worktree (porcelain line count). */
   readonly dirtyCount: number
+  /** Host-configured status-cache TTL (ms); clients mirror it for their short cache. */
+  readonly statusCacheTtlMs: number
 }
 
 /** One row of the worktree list, in `git worktree list --porcelain` order. */
@@ -38,11 +40,11 @@ export interface GitWorktreeRow {
 export interface GitWorktreeAddRequest {
   /** Worktree name; also the default branch name and default path segment. */
   readonly name: string
-  /** Branch to check out or create; defaults to `name`. */
+  /** Branch to create (`createBranch`) or check out; defaults to `name` when creating. */
   readonly branch?: string
   /** Create the branch (`-b`) instead of checking out an existing one. */
   readonly createBranch?: boolean
-  /** Optional start point (commit-ish) the new branch bases on. */
+  /** Optional start point (commit-ish); defaults to the checked-out `branch`. */
   readonly startPoint?: string
   /** Explicit worktree path; defaults to `<repo parent>/<repo name>-<name>`. */
   readonly path?: string

@@ -237,6 +237,7 @@ export class GitWorktreeService extends Service {
       worktreePath: repo.worktreePath,
       mainRepoPath: repo.mainRepoPath,
       dirtyCount: dirty.count,
+      statusCacheTtlMs: this.config.statusCacheTtlMs,
     }
     this.statusCache.set(repo.worktreePath, { at: Date.now(), payload })
     return payload
@@ -311,8 +312,12 @@ export class GitWorktreeService extends Service {
     if (!isAbsolute(path)) throw new GitError('git/command-failed', 'worktree path must be absolute: ' + path)
     const argv = ['worktree', 'add']
     if (request.createBranch === true) argv.push('-b', branch)
-    if (request.startPoint !== undefined) argv.push(request.startPoint)
+    // Without createBranch the branch names the commit-ish to check out; an
+    // explicit startPoint wins when both are given. The commit-ish is the
+    // positional argument AFTER the path in git worktree add.
+    const commitish = request.createBranch === true ? request.startPoint : request.startPoint ?? request.branch
     argv.push(path)
+    if (commitish !== undefined) argv.push(commitish)
     const gitPath = await this.executable()
     const result = await runGit(this.subprocess, gitPath, argv, repo.mainRepoPath, this.config.commandTimeoutMs)
     if (result.exitCode !== 0) {

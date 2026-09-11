@@ -28,7 +28,7 @@ export const name = 'dsh-git-host'
  * The route carrier, the trust fence guarding every route, the git command
  * runner, and the session corpus that resolves session cwds.
  */
-export const inject = ['webServer', 'connection', 'subprocess', 'sessionQuery']
+export const inject = ['webServer', 'connection', 'subprocess', 'sessions']
 
 /** dsh-git-host configuration. */
 export interface Config {

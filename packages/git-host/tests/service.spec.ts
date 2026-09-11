@@ -131,6 +131,25 @@ describe('worktree creation', () => {
     expect(row.branch).toBe('refs/heads/topic')
   })
 
+  it('checks out an existing branch when createBranch is not set', async () => {
+    const { repo, sessionId, service } = await compose()
+    await git(repo, ['branch', 'existing'])
+    const row = await service.addWorktree(sessionId, { name: 'x', branch: 'existing' })
+    expect(row.branch).toBe('refs/heads/existing')
+    // The checked-out worktree really sits on the requested branch.
+    expect(await git(row.path, ['rev-parse', '--abbrev-ref', 'HEAD']).then(out => out.trim())).toBe('existing')
+  })
+
+  it('bases a created branch on the given start point', async () => {
+    const { repo, sessionId, service } = await compose()
+    await writeFile(repo + '/README.md', 'second\n')
+    await git(repo, ['add', '.'])
+    await git(repo, ['commit', '-m', 'second'])
+    const head = (await git(repo, ['rev-parse', '--short', 'HEAD'])).trim()
+    const row = await service.addWorktree(sessionId, { name: 'y', createBranch: true, startPoint: head })
+    expect(row.branch).toBe('refs/heads/y')
+  })
+
   it('rejects a name that is not a plain path segment', async () => {
     const { sessionId, service } = await compose()
     await expect(service.addWorktree(sessionId, { name: 'a/b' })).rejects.toMatchObject({ code: 'git/command-failed' })

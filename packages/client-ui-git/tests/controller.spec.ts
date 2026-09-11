@@ -41,6 +41,28 @@ describe('status', () => {
     expect(calls).toHaveLength(2)
   })
 
+  it('force bypasses the cache for the guaranteed-fresh re-pull points', async () => {
+    vi.useFakeTimers()
+    const calls = stubFetch({ [BASE + GIT_STATUS_ROUTE.slice(1) + '?sessionId=s1']: { status: 200, body: { branch: 'main', isWorktree: false, dirtyCount: 0, statusCacheTtlMs: 5000 } } })
+    const controller = new GitController()
+    await controller.status('s1')
+    vi.advanceTimersByTime(1_000)
+    await controller.status('s1')
+    expect(calls).toHaveLength(1)
+    await controller.status('s1', { force: true })
+    expect(calls).toHaveLength(2)
+  })
+
+  it('uses the host-provided statusCacheTtlMs for the cache window', async () => {
+    vi.useFakeTimers()
+    const calls = stubFetch({ [BASE + GIT_STATUS_ROUTE.slice(1) + '?sessionId=s1']: { status: 200, body: { branch: 'main', isWorktree: false, dirtyCount: 0, statusCacheTtlMs: 1_000 } } })
+    const controller = new GitController()
+    await controller.status('s1')
+    vi.advanceTimersByTime(1_500)
+    await controller.status('s1')
+    expect(calls).toHaveLength(2)
+  })
+
   it('caches per session id', async () => {
     const calls = stubFetch({
       [BASE + GIT_STATUS_ROUTE.slice(1) + '?sessionId=s1']: { status: 200, body: { branch: 'a', isWorktree: false, dirtyCount: 0 } },

@@ -78,10 +78,10 @@ export function GitBadge({ sessionId, t, controller }: GitBadgeProps) {
     return () => { alive = false }
   }, [sessionId, controller])
 
-  /** Full panel read: status and worktrees, never served from cache. */
+  /** Full panel read: status and worktrees, always re-pulled fresh. */
   const refreshPanel = useCallback(async (): Promise<void> => {
     const [nextStatus, nextRows] = await Promise.all([
-      controller.status(sessionId),
+      controller.status(sessionId, { force: true }),
       controller.worktrees(sessionId),
     ])
     setStatus(nextStatus)
@@ -112,7 +112,9 @@ export function GitBadge({ sessionId, t, controller }: GitBadgeProps) {
     if (name.length === 0 || busy) return
     setBusy(true)
     setPanelError(undefined)
-    const request: { name: string; branch?: string; path?: string } = { name }
+    // The branch field defaults to the name (placeholder says so): creating
+    // the branch is the form's contract, so createBranch is always sent.
+    const request: { name: string; branch?: string; createBranch: boolean; path?: string } = { name, createBranch: true }
     if (branch.length > 0) request['branch'] = branch
     if (path.length > 0) request['path'] = path
     const created = await controller.addWorktree(sessionId, request)
@@ -194,16 +196,7 @@ export function GitBadge({ sessionId, t, controller }: GitBadgeProps) {
                         {dirtyKnown ? t('panel.dirty.count', { count: row.dirtyCount }) : t('panel.dirty.unknown')}
                       </span>
                       {protectedRow
-                        ? (
-                          <button
-                            type="button"
-                            className={css.delete}
-                            disabled
-                            title={row.isMain ? t('panel.delete.disabled.main') : t('panel.delete.disabled.current')}
-                          >
-                            {t('panel.delete')}
-                          </button>
-                        )
+                        ? null
                         : (
                           <button
                             type="button"
