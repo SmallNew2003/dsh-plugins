@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { foldSessionUsage, routeKey, type RawUsageEvent } from '../src/fold-usage.ts'
+import { emptyBuckets, foldSessionUsage, routeKey, type RawUsageEvent } from '../src/fold-usage.ts'
 
 const SOURCE = { message: { source: { provider: 'deepseek', model: 'deepseek-v4-flash' } } }
 
@@ -45,6 +45,24 @@ describe('foldSessionUsage', () => {
     const fold = foldSessionUsage([{ type: 'assistant/attempt', time: 0, data: { turn: 2, step: 1, stream } }])
     expect(fold.routes.get(routeKey('unattributed', 'unattributed')))
       .toEqual({ uncachedInputTokens: 30, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 })
+  })
+
+  it('does not count events with no usage and no stream', () => {
+    const fold = foldSessionUsage([
+      { type: 'user/message', time: 0, data: {} },
+      { type: 'assistant/message', time: 0, data: { turn: 1, step: 1, ...SOURCE } },
+    ])
+    expect(fold.totals).toEqual(emptyBuckets())
+    expect(fold.routes.size).toBe(0)
+    expect(fold.daily.size).toBe(0)
+  })
+
+  it('prefers the usage field over the stream when both are present', () => {
+    const stream = [{ type: 'chunk', chunk: { type: 'usage', usage: { inputTokens: 999, outputTokens: 999 } } }]
+    const fold = foldSessionUsage([
+      { type: 'assistant/message', time: 0, data: { turn: 1, step: 1, usage: { inputTokens: 10, outputTokens: 2 }, stream, ...SOURCE } },
+    ])
+    expect(fold.totals).toEqual({ uncachedInputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 })
   })
 
   it('ignores events with invalid usage buckets', () => {

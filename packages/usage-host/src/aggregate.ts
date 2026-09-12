@@ -64,6 +64,9 @@ export function aggregateSessions(records: readonly AggregateInput[], normalizer
   let anyPriced = false
 
   for (const [key, buckets] of routeBuckets) {
+    // A route fully replaced back to zero carries no usage — drop it instead
+    // of rendering an empty provider/model row.
+    if (usageTotal(buckets) === 0) continue
     const separator = key.indexOf('\u0000')
     const normalized = normalizer.normalize(key.slice(0, separator), key.slice(separator + 1))
     const provider = providerAcc.get(normalized.providerKey) ?? {
@@ -117,6 +120,7 @@ export function aggregateSessions(records: readonly AggregateInput[], normalizer
   providers.sort((left, right) => usageTotal(right.buckets) - usageTotal(left.buckets))
 
   const dailyRows: DailyUsageRow[] = [...daily.entries()]
+    .filter(([, buckets]) => usageTotal(buckets) !== 0)
     .map(([date, buckets]) => ({ date, buckets }))
     .sort((left, right) => left.date.localeCompare(right.date))
   sessionRows.sort((left, right) => usageTotal(right.buckets) - usageTotal(left.buckets))

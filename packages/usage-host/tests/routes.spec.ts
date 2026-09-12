@@ -157,6 +157,30 @@ describe('summary route', () => {
     expect(body.topSessions[0]).toMatchObject({ sessionId: 'b', title: 't-b' })
   })
 
+  it('serves a larger limit from the untruncated cache inside the refresh window', async () => {
+    const sessions = Array.from({ length: 25 }, (_, index) => session('s' + String(index).padStart(2, '0'), 10 + index))
+    const handler = compose(sessions)
+    const small = pair({ method: 'GET', url: USAGE_SUMMARY_ROUTE + '?limit=3' })
+    await handler(small.req, small.res)
+    expect((small.reply.body() as UsageSummaryResponse).scanning).toBe(true)
+
+    await vi.waitFor(async () => {
+      const poll = pair({ method: 'GET', url: USAGE_SUMMARY_ROUTE })
+      await handler(poll.req, poll.res)
+      expect((poll.reply.body() as UsageSummaryResponse).scanning).toBe(false)
+    })
+
+    const narrow = pair({ method: 'GET', url: USAGE_SUMMARY_ROUTE + '?limit=3' })
+    await handler(narrow.req, narrow.res)
+    expect((narrow.reply.body() as UsageSummaryResponse).topSessions).toHaveLength(3)
+
+    // Same refresh window, larger limit: the cache must hold the full
+    // aggregation and let summary() slice, so more rows are now reachable.
+    const larger = pair({ method: 'GET', url: USAGE_SUMMARY_ROUTE + '?limit=200' })
+    await handler(larger.req, larger.res)
+    expect((larger.reply.body() as UsageSummaryResponse).topSessions).toHaveLength(25)
+  })
+
   it('rejects POST with 405 and an allow: GET header', async () => {
     const handler = compose([session('a', 10)])
     const call = pair({ method: 'POST', url: USAGE_SUMMARY_ROUTE })

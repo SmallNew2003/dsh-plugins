@@ -9,7 +9,7 @@
  */
 
 import { Fragment, useEffect, useState } from 'react'
-import type { ProviderUsageRow, UsageBuckets, UsageSummaryResponse } from 'dsh-usage-host/shared'
+import { usageTotal, type ProviderUsageRow, type UsageSummaryResponse } from 'dsh-usage-host/shared'
 import type { InjectFace, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { isServiceMissing } from './controller.ts'
 import type { UsageController } from './controller.ts'
@@ -50,11 +50,6 @@ function formatTokens(count: number): string {
 /** Two-decimal USD amount. */
 function formatUsd(amount: number): string {
   return '$' + amount.toFixed(2)
-}
-
-/** Sum of the four disjoint buckets — the share denominator and bar unit. */
-function bucketTotal(buckets: UsageBuckets): number {
-  return buckets.uncachedInputTokens + buckets.outputTokens + buckets.cacheReadTokens + buckets.cacheWriteTokens
 }
 
 /** One provider's priced amount: the sum of its models' estimates (undefined = none priced). */
@@ -145,7 +140,7 @@ export function UsageSection(props: UsageSectionProps) {
 
   const totals = response.totals
   const daily = response.daily.slice(-DAILY_DAYS)
-  const dailyMax = Math.max(0, ...daily.map(day => bucketTotal(day.buckets)))
+  const dailyMax = Math.max(0, ...daily.map(day => usageTotal(day.buckets)))
 
   return (
     <div className={css.section}>
@@ -170,7 +165,7 @@ export function UsageSection(props: UsageSectionProps) {
         </div>
         <div className={css.card}>
           <span className={css.cardLabel}>{t('buckets.total')}</span>
-          <span className={css.cardValue}>{formatTokens(bucketTotal(totals))}</span>
+          <span className={css.cardValue}>{formatTokens(usageTotal(totals))}</span>
         </div>
         {response.estimate !== undefined
           ? (
@@ -275,7 +270,7 @@ export function UsageSection(props: UsageSectionProps) {
         : (
           <div className={css.daily}>
             {daily.map(day => {
-              const dayTotal = bucketTotal(day.buckets)
+              const dayTotal = usageTotal(day.buckets)
               const height = dailyMax > 0 ? Math.round((dayTotal / dailyMax) * 100) : 0
               return (
                 <div

@@ -52,7 +52,7 @@ describe('UsageSection', () => {
     expect(screen.getByText('大项目')).toBeTruthy()
   })
 
-  it('keeps polling while scanning and stops when settled', async () => {
+  it('keeps polling while scanning; a settled response keeps polling at the 60s cadence', async () => {
     vi.useFakeTimers()
     const fetchSummary = vi.fn()
       .mockResolvedValueOnce({ ...SUMMARY, scanning: true })

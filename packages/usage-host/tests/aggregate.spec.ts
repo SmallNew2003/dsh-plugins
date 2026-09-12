@@ -81,6 +81,15 @@ describe('aggregateSessions', () => {
     expect(result.daily[1]!.buckets.outputTokens).toBe(2)
   })
 
+  it('drops routes and daily columns that were fully replaced back to zero', () => {
+    const result = aggregateSessions([
+      record('a', [message('deepseek', 'deepseek-v4-flash', 10), message('deepseek', 'deepseek-v4-flash', 0)]),
+    ], normalizer, 20)
+    expect(result.totals).toEqual(emptyBuckets())
+    expect(result.providers).toEqual([])
+    expect(result.daily).toEqual([])
+  })
+
   it('handles an empty corpus', () => {
     const result = aggregateSessions([], normalizer, 20)
     expect(result.providers).toEqual([])

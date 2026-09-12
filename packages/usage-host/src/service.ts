@@ -55,7 +55,7 @@ export class UsageService {
   }
 
   summary(limit = 20): UsageSummaryResponse {
-    if (!this.scanning && Date.now() - this.lastScanAt >= this.refreshMs) void this.scan(limit)
+    if (!this.scanning && Date.now() - this.lastScanAt >= this.refreshMs) void this.scan()
     if (this.cached === undefined) {
       return {
         generatedAt: Date.now(), scanning: true, sessionCount: 0, skippedSessions: 0,
@@ -66,7 +66,7 @@ export class UsageService {
     return { ...this.cached, topSessions: this.cached.topSessions.slice(0, limit) }
   }
 
-  private async scan(limit: number): Promise<void> {
+  private async scan(): Promise<void> {
     if (this.scanning) return
     this.scanning = true
     try {
@@ -106,7 +106,9 @@ export class UsageService {
           },
         }
       })
-      const views = aggregateSessions(inputs, normalizer, limit)
+      // The cache holds the full aggregation (no limit here): summary() slices
+      // topSessions per request, so a later larger ?limit is still servable.
+      const views = aggregateSessions(inputs, normalizer, Number.MAX_SAFE_INTEGER)
       this.cached = {
         generatedAt: Date.now(),
         scanning: false,
