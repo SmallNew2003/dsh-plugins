@@ -1,0 +1,20 @@
+{
+  "providers": {
+    "deepseek": { "displayName": "DeepSeek", "aliases": ["ds"] },
+    "anthropic": { "displayName": "Anthropic", "aliases": [] },
+    "openai": { "displayName": "OpenAI", "aliases": [] },
+    "unattributed": { "displayName": "未归因 / Unattributed", "aliases": [] }
+  },
+  "models": {
+    "deepseek-chat": {
+      "displayName": "DeepSeek Chat",
+      "aliases": ["deepseek-chat-20260115", "ds-chat"],
+      "pricing": { "input": 0.27, "cacheRead": 0.027, "cacheWrite": 0.27, "output": 1.1 }
+    },
+    "deepseek-reasoner": {
+      "displayName": "DeepSeek Reasoner",
+      "aliases": ["deepseek-reasoner-20260115", "ds-reasoner"],
+      "pricing": { "input": 0.55, "cacheRead": 0.055, "cacheWrite": 0.55, "output": 2.19 }
+    }
+  }
+}
