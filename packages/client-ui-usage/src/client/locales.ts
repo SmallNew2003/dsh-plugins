@@ -21,6 +21,7 @@ export const zh = {
   'buckets.cacheWrite': '缓存写入',
   'buckets.total': '总计',
   'estimate.disclaimer': '金额为按价目表估算,可能与实际账单不一致',
+  'estimate.title': '估算金额',
   'providers.title': '提供商',
   'models.title': '模型',
   'daily.title': '按日用量',
@@ -32,6 +33,7 @@ export const zh = {
   'state.retry': '重试',
   'state.serviceMissing': '使用统计服务未安装或未响应',
   'unpriced.notice': '以下模型未配置单价,未计入金额:{models}',
+  'unpriced.intro': '以下模型未配置单价,未计入金额',
   'share.of': '占比',
 } as const
 
@@ -45,6 +47,7 @@ export const en: Record<UsageKey, string> = {
   'buckets.cacheWrite': 'Cache write',
   'buckets.total': 'Total',
   'estimate.disclaimer': 'Amounts are estimated from the price list and may differ from actual billing',
+  'estimate.title': 'Estimated amount',
   'providers.title': 'Providers',
   'models.title': 'Models',
   'daily.title': 'Daily usage',
@@ -56,6 +59,7 @@ export const en: Record<UsageKey, string> = {
   'state.retry': 'Retry',
   'state.serviceMissing': 'The usage service is not installed or not responding',
   'unpriced.notice': 'The following models have no configured price and are not counted in amounts: {models}',
+  'unpriced.intro': 'The following models have no configured price and are not counted in amounts',
   'share.of': 'Share',
 }
 

@@ -1,0 +1,111 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 96px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  border-radius: 8px;
+}
+
+.cardLabel {
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.cardValue {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th,
+.table td {
+  padding: 4px 8px;
+  text-align: right;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.table th:first-child,
+.table td:first-child {
+  text-align: left;
+}
+
+.table .table {
+  margin: 4px 0;
+}
+
+.table .table th,
+.table .table td {
+  border-bottom: none;
+  padding: 2px 8px;
+}
+
+.bar {
+  min-width: 80px;
+  height: 6px;
+  overflow: hidden;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 3px;
+}
+
+.barFill {
+  display: block;
+  height: 100%;
+  background: currentColor;
+}
+
+.daily {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 96px;
+}
+
+.column {
+  flex: 1;
+  min-width: 4px;
+  background: currentColor;
+  opacity: 0.75;
+  border-radius: 2px 2px 0 0;
+}
+
+.notice {
+  padding: 8px 12px;
+  background: color-mix(in srgb, #f0b429 18%, transparent);
+  border-radius: 8px;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #d64545;
+}
+
+.retry {
+  padding: 4px 12px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
