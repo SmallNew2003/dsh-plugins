@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { UsageSection } from '../src/client/UsageSection.tsx'
 import { zh } from '../src/client/locales.ts'
 import type { UsageSummaryResponse } from 'dsh-usage-host/shared'
@@ -43,6 +43,8 @@ function mount(response: UsageSummaryResponse, fetchSummary = vi.fn().mockResolv
 }
 
 describe('UsageSection', () => {
+  afterEach(() => { cleanup() })
+
   it('renders provider rows with model detail and estimate', async () => {
     mount(SUMMARY)
     await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy())
@@ -80,5 +82,55 @@ describe('UsageSection', () => {
     mount(SUMMARY, vi.fn().mockRejectedValue(new Error('boom')))
     await waitFor(() => expect(screen.getByText(t('state.error'))).toBeTruthy())
     expect(screen.getByText(t('state.retry'))).toBeTruthy()
+  })
+
+  it('renders the service-missing state when the route answers 404', async () => {
+    mount(SUMMARY, vi.fn().mockRejectedValue(new Error('usage: summary route failed with 404')))
+    await waitFor(() => expect(screen.getByText(t('state.serviceMissing'))).toBeTruthy())
+    expect(screen.queryByText(t('state.error'))).toBeNull()
+  })
+
+  it('renders the generic error state for other failures', async () => {
+    mount(SUMMARY, vi.fn().mockRejectedValue(new Error('usage: summary route failed with 503')))
+    await waitFor(() => expect(screen.getByText(t('state.error'))).toBeTruthy())
+    expect(screen.queryByText(t('state.serviceMissing'))).toBeNull()
+  })
+
+  it('schedules exactly one refetch 60s after a settled response', async () => {
+    vi.useFakeTimers()
+    const fetchSummary = vi.fn().mockResolvedValue(SUMMARY)
+    mount(SUMMARY, fetchSummary)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchSummary).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(fetchSummary).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(fetchSummary).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('cancels the pending 60s refetch on unmount', async () => {
+    vi.useFakeTimers()
+    const fetchSummary = vi.fn().mockResolvedValue(SUMMARY)
+    const controller = { fetchSummary } as never
+    const { unmount } = render(<UsageSection controller={controller} t={t as never} />)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchSummary).toHaveBeenCalledTimes(1)
+    unmount()
+    await vi.advanceTimersByTimeAsync(61_000)
+    expect(fetchSummary).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
+
+  it('renders the session count card with a skipped sub-line', async () => {
+    mount({ ...SUMMARY, sessionCount: 7, skippedSessions: 2 })
+    await waitFor(() => expect(screen.getByText('7')).toBeTruthy())
+    expect(screen.getByText(t('summary.skipped', { count: 2 }))).toBeTruthy()
+  })
+
+  it('omits the skipped sub-line when no session was skipped', async () => {
+    mount({ ...SUMMARY, sessionCount: 7, skippedSessions: 0 })
+    await waitFor(() => expect(screen.getByText('7')).toBeTruthy())
+    expect(screen.queryByText(t('summary.skipped', { count: 0 }))).toBeNull()
   })
 })

@@ -11,6 +11,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import type { ProviderUsageRow, UsageBuckets, UsageSummaryResponse } from 'dsh-usage-host/shared'
 import type { InjectFace, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import { isServiceMissing } from './controller.ts'
 import type { UsageController } from './controller.ts'
 import { NS } from './locales.ts'
 import css from './UsageSection.module.css'
@@ -32,6 +33,9 @@ export type UsageSectionProps = Partial<InjectFace<UsageSectionInjected>>
 
 /** Re-poll cadence while the host reports a background scan. */
 const POLL_MS = 5_000
+
+/** Re-poll cadence once the scan has settled — keeps the dashboard current. */
+const IDLE_POLL_MS = 60_000
 
 /** How many most-recent days the chart renders. */
 const DAILY_DAYS = 30
@@ -80,7 +84,7 @@ function pathTail(path: string): string {
 export function UsageSection(props: UsageSectionProps) {
   const { controller, t } = props
   const [response, setResponse] = useState<UsageSummaryResponse | undefined>(undefined)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'missing'>('loading')
   // Keys of providers whose model breakdown the user collapsed; a provider
   // absent from the set renders expanded.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
@@ -97,10 +101,11 @@ export function UsageSection(props: UsageSectionProps) {
         if (cancelled) return
         setResponse(next)
         setStatus('ready')
-        // Scan in progress: re-poll on the fixed cadence until it settles.
-        if (next.scanning) timer = setTimeout(() => { void load() }, POLL_MS)
-      } catch {
-        if (!cancelled) setStatus('error')
+        // Scan in progress: fast cadence until it settles; afterwards a slow
+        // keep-fresh cadence. Either way the cleanup clears the pending timer.
+        timer = setTimeout(() => { void load() }, next.scanning ? POLL_MS : IDLE_POLL_MS)
+      } catch (error) {
+        if (!cancelled) setStatus(isServiceMissing(error) ? 'missing' : 'error')
       }
     }
     void load()
@@ -121,11 +126,11 @@ export function UsageSection(props: UsageSectionProps) {
     })
   }
 
-  if (status === 'error') {
+  if (status === 'error' || status === 'missing') {
     return (
       <div className={css.section}>
         <div className={css.error}>
-          <p>{t('state.error')}</p>
+          <p>{status === 'missing' ? t('state.serviceMissing') : t('state.error')}</p>
           <button type="button" className={css.retry} onClick={() => { setReload(current => current + 1) }}>
             {t('state.retry')}
           </button>
@@ -176,6 +181,13 @@ export function UsageSection(props: UsageSectionProps) {
             </div>
           )
           : null}
+        <div className={css.card}>
+          <span className={css.cardLabel}>{t('summary.sessions')}</span>
+          <span className={css.cardValue}>{String(response.sessionCount)}</span>
+          {response.skippedSessions > 0
+            ? <span className={css.cardLabel}>{t('summary.skipped', { count: response.skippedSessions })}</span>
+            : null}
+        </div>
       </div>
 
       <h3>{t('providers.title')}</h3>

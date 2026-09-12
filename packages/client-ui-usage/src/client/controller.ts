@@ -15,6 +15,11 @@ function hostBase(): string {
 
 const TTL_MS = 5_000
 
+/** The thrown surface of a 404 from the summary route: the usage service is not installed on this host. */
+export function isServiceMissing(error: unknown): boolean {
+  return error instanceof Error && error.message === 'usage: summary route failed with 404'
+}
+
 export class UsageController {
   private readonly fetcher: typeof fetch
   private inflight: Promise<UsageSummaryResponse> | undefined
