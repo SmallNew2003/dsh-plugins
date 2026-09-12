@@ -161,6 +161,58 @@ describe('UsageService', () => {
     expect(service.summary().totals.outputTokens).toBe(45)
   })
 
+  it('contains a listSessions failure: scan resolves, zero shell kept, throttle holds', async () => {
+    // Observable hook: the background scan is awaited directly — it must
+    // settle resolved, never reject out of the service. The process-level
+    // 'unhandledRejection' listener double-checks the fire-and-forget path.
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const { query, calls } = makeQuery([session('a', 10)], false)
+      query.listSessions = async () => {
+        calls.listSessions += 1
+        throw new Error('corpus down')
+      }
+      const service = new UsageService(query, { indexPath, refreshMs: 60_000 })
+
+      await expect((service as unknown as { scan(limit: number): Promise<void> }).scan(20)).resolves.toBeUndefined()
+      expect(unhandled).toEqual([])
+      expect((service as unknown as { scanning: boolean }).scanning).toBe(false)
+
+      // The zero shell is untouched and lastScanAt now throttles the next scan.
+      const shell = service.summary()
+      expect(calls.listSessions).toBe(1)
+      expect(shell.sessionCount).toBe(0)
+      expect(shell.totals.outputTokens).toBe(0)
+      expect(shell.providers).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  it('contains a saveIndexAtomic failure: scan resolves and the cache stays empty', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      saveSpy.mockRejectedValueOnce(new Error('disk full'))
+      const { query } = makeQuery([session('a', 10)], false)
+      const service = new UsageService(query, { indexPath, refreshMs: 60_000 })
+
+      await expect((service as unknown as { scan(limit: number): Promise<void> }).scan(20)).resolves.toBeUndefined()
+      expect(unhandled).toEqual([])
+      expect((service as unknown as { scanning: boolean }).scanning).toBe(false)
+
+      // First-scan failure: still the zero shell, never a partial summary.
+      const shell = service.summary()
+      expect(shell.sessionCount).toBe(0)
+      expect(shell.totals.outputTokens).toBe(0)
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
   it('falls back to a full re-read for unchanged sessions when no probe exists', async () => {
     const a = session('a', 10)
     const b = session('b', 30)

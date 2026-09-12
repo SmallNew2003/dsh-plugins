@@ -113,6 +113,13 @@ export class UsageService {
         skippedSessions: skipped,
         ...views,
       }
+    } catch (error) {
+      // Containment: summary() fires scan() fire-and-forget, so a rejection
+      // here would be unhandled and abort the host process. Keep the previous
+      // cache untouched (a partial result must never replace a good one) and
+      // log once; lastScanAt still advances below so the refreshMs throttle
+      // holds and a healthy corpus is picked up on the next window.
+      console.warn('[dsh-usage-host] usage scan failed; keeping the previous summary', error)
     } finally {
       this.scanning = false
       this.lastScanAt = Date.now()
