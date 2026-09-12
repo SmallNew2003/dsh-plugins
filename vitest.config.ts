@@ -7,6 +7,7 @@ export default defineConfig({
     environmentMatchGlobs: [
       ['packages/client-ui-git/tests/**', 'jsdom'],
       ['packages/client-ui-memory/tests/**', 'jsdom'],
+      ['packages/client-ui-usage/tests/**', 'jsdom'],
     ],
   },
 })
