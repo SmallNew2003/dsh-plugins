@@ -1,9 +1,7 @@
 /**
- * Usage settings section: summary cards, the provider share table with
- * expandable model breakdown, the daily bar chart, and the top-sessions
- * table. Data arrives through the inject face (one shared UsageController);
- * while the host reports a scan in progress the section re-polls on a fixed
- * cadence, and a failed read degrades to an inline error with retry.
+ * Usage settings section with a compact overview, provider drill-down, daily
+ * trend, and top-session ranking. Data arrives through the inject face; while
+ * the host scans, the section re-polls on a fixed cadence.
  *
  * @module dsh-client-ui-usage/UsageSection
  */
@@ -16,43 +14,26 @@ import type { UsageController } from './controller.ts'
 import { NS } from './locales.ts'
 import css from './UsageSection.module.css'
 
-/** Injected dependencies of {@link UsageSection} (the slot inject face). */
 export interface UsageSectionInjected {
-  /** Data carrier for the usage summary route; one instance per plugin life. */
   readonly controller: UsageController
-  /** The usage-namespace translator. */
   readonly t: TranslateNS<typeof NS>
 }
 
-/**
- * Props delivered by the slot outlet: the inject face spread flat, each
- * member optional until the shell injects — a direct render without the face
- * mounts nothing (the ui-settings-models pattern).
- */
 export type UsageSectionProps = Partial<InjectFace<UsageSectionInjected>>
 
-/** Re-poll cadence while the host reports a background scan. */
 const POLL_MS = 5_000
-
-/** Re-poll cadence once the scan has settled — keeps the dashboard current. */
 const IDLE_POLL_MS = 60_000
-
-/** How many most-recent days the chart renders. */
 const DAILY_DAYS = 30
 
-/** ≥1e6 → x.xM; ≥1e3 → x.xK; else the integer itself. */
 function formatTokens(count: number): string {
   if (count >= 1e6) return (count / 1e6).toFixed(1) + 'M'
   if (count >= 1e3) return (count / 1e3).toFixed(1) + 'K'
   return String(count)
 }
 
-/** Two-decimal USD amount. */
-function formatUsd(amount: number): string {
-  return '$' + amount.toFixed(2)
-}
+function formatUsd(amount: number): string { return '$' + amount.toFixed(2) }
+function formatPercent(share: number): string { return Math.round(share * 100) + '%' }
 
-/** One provider's priced amount: the sum of its models' estimates (undefined = none priced). */
 function providerUsd(row: ProviderUsageRow): number | undefined {
   let sum = 0
   let priced = false
@@ -65,25 +46,16 @@ function providerUsd(row: ProviderUsageRow): number | undefined {
   return priced ? sum : undefined
 }
 
-/** Final path segment — the cwd tail the sessions table shows. */
 function pathTail(path: string): string {
   const index = path.lastIndexOf('/')
   return index === -1 ? path : path.slice(index + 1)
 }
 
-/**
- * Render the usage statistics section content.
- * @param props - slot-delivered injected dependencies.
- * @returns the section, or null while the shell has not injected yet.
- */
 export function UsageSection(props: UsageSectionProps) {
   const { controller, t } = props
   const [response, setResponse] = useState<UsageSummaryResponse | undefined>(undefined)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'missing'>('loading')
-  // Keys of providers whose model breakdown the user collapsed; a provider
-  // absent from the set renders expanded.
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
-  // Bumped by the retry button; the load effect re-runs with a fresh read.
+  const [expandedProviders, setExpandedProviders] = useState<ReadonlySet<string>>(() => new Set())
   const [reload, setReload] = useState(0)
 
   useEffect(() => {
@@ -96,8 +68,6 @@ export function UsageSection(props: UsageSectionProps) {
         if (cancelled) return
         setResponse(next)
         setStatus('ready')
-        // Scan in progress: fast cadence until it settles; afterwards a slow
-        // keep-fresh cadence. Either way the cleanup clears the pending timer.
         timer = setTimeout(() => { void load() }, next.scanning ? POLL_MS : IDLE_POLL_MS)
       } catch (error) {
         if (!cancelled) setStatus(isServiceMissing(error) ? 'missing' : 'error')
@@ -113,7 +83,7 @@ export function UsageSection(props: UsageSectionProps) {
   if (controller === undefined || t === undefined) return null
 
   const toggleProvider = (key: string): void => {
-    setCollapsed(current => {
+    setExpandedProviders(current => {
       const next = new Set(current)
       if (next.has(key)) next.delete(key)
       else next.add(key)
@@ -122,202 +92,68 @@ export function UsageSection(props: UsageSectionProps) {
   }
 
   if (status === 'error' || status === 'missing') {
-    return (
-      <div className={css.section}>
-        <div className={css.error}>
-          <p>{status === 'missing' ? t('state.serviceMissing') : t('state.error')}</p>
-          <button type="button" className={css.retry} onClick={() => { setReload(current => current + 1) }}>
-            {t('state.retry')}
-          </button>
-        </div>
-      </div>
-    )
+    return <div className={css.section}><div className={css.error}><p>{status === 'missing' ? t('state.serviceMissing') : t('state.error')}</p><button type="button" className={css.retry} onClick={() => { setReload(current => current + 1) }}>{t('state.retry')}</button></div></div>
   }
-
-  if (response === undefined) {
-    return <div className={css.section}><p>{t('state.scanning')}</p></div>
-  }
+  if (response === undefined) return <div className={css.section}><p>{t('state.scanning')}</p></div>
 
   const totals = response.totals
+  const totalTokens = usageTotal(totals)
   const daily = response.daily.slice(-DAILY_DAYS)
   const dailyMax = Math.max(0, ...daily.map(day => usageTotal(day.buckets)))
+  const updatedAt = response.generatedAt > 0 ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(response.generatedAt)) : undefined
 
   return (
     <div className={css.section}>
-      <h2>{t('summary.title')}</h2>
-      {response.scanning ? <p>{t('state.scanning')}</p> : null}
-      <div className={css.cards}>
-        <div className={css.card}>
-          <span className={css.cardLabel}>{t('buckets.uncachedInput')}</span>
-          <span className={css.cardValue}>{formatTokens(totals.uncachedInputTokens)}</span>
+      <header className={css.header}>
+        <div><h2>{t('summary.title')}</h2>{updatedAt === undefined ? null : <p className={css.updatedAt}>{t('summary.updatedAt', { time: updatedAt })}</p>}</div>
+        {response.scanning ? <span className={css.scanning}>{t('state.scanning')}</span> : null}
+      </header>
+
+      <div className={css.summaryGrid}>
+        <div className={css.primaryMetrics}>
+          <div className={css.primaryMetric}><span className={css.metricLabel}>{t('summary.totalTokens')}</span><strong className={css.primaryValue}>{formatTokens(totalTokens)}</strong></div>
+          {response.estimate === undefined ? null : <div className={css.primaryMetric}><span className={css.metricLabel}>{t('estimate.title')}</span><strong className={css.primaryValue}>{formatUsd(response.estimate.totalUsd)}</strong><span className={css.metricHint}>{t('estimate.disclaimer')}</span></div>}
+          <div className={css.primaryMetric}><span className={css.metricLabel}>{t('summary.sessions')}</span><strong className={css.primaryValue}>{String(response.sessionCount)}</strong>{response.skippedSessions > 0 ? <span className={css.metricHint}>{t('summary.skipped', { count: response.skippedSessions })}</span> : null}</div>
         </div>
-        <div className={css.card}>
-          <span className={css.cardLabel}>{t('buckets.output')}</span>
-          <span className={css.cardValue}>{formatTokens(totals.outputTokens)}</span>
-        </div>
-        <div className={css.card}>
-          <span className={css.cardLabel}>{t('buckets.cacheRead')}</span>
-          <span className={css.cardValue}>{formatTokens(totals.cacheReadTokens)}</span>
-        </div>
-        <div className={css.card}>
-          <span className={css.cardLabel}>{t('buckets.cacheWrite')}</span>
-          <span className={css.cardValue}>{formatTokens(totals.cacheWriteTokens)}</span>
-        </div>
-        <div className={css.card}>
-          <span className={css.cardLabel}>{t('buckets.total')}</span>
-          <span className={css.cardValue}>{formatTokens(usageTotal(totals))}</span>
-        </div>
-        {response.estimate !== undefined
-          ? (
-            <div className={css.card}>
-              <span className={css.cardLabel}>{t('estimate.title')}</span>
-              <span className={css.cardValue}>{formatUsd(response.estimate.totalUsd)}</span>
-              <span className={css.cardLabel}>{t('estimate.disclaimer')}</span>
-            </div>
-          )
-          : null}
-        <div className={css.card}>
-          <span className={css.cardLabel}>{t('summary.sessions')}</span>
-          <span className={css.cardValue}>{String(response.sessionCount)}</span>
-          {response.skippedSessions > 0
-            ? <span className={css.cardLabel}>{t('summary.skipped', { count: response.skippedSessions })}</span>
-            : null}
-        </div>
+
+        <section className={css.breakdown} aria-labelledby="usage-token-breakdown">
+          <h3 id="usage-token-breakdown">{t('summary.breakdown')}</h3>
+          <div className={css.breakdownGrid}>
+            <div className={css.breakdownItem}><span>{t('buckets.uncachedInput')}</span><strong>{formatTokens(totals.uncachedInputTokens)}</strong></div>
+            <div className={css.breakdownItem}><span>{t('buckets.output')}</span><strong>{formatTokens(totals.outputTokens)}</strong></div>
+            <div className={css.breakdownItem}><span>{t('buckets.cacheRead')}</span><strong>{formatTokens(totals.cacheReadTokens)}</strong></div>
+            <div className={css.breakdownItem}><span>{t('buckets.cacheWrite')}</span><strong>{formatTokens(totals.cacheWriteTokens)}</strong></div>
+          </div>
+        </section>
       </div>
 
-      <h3>{t('providers.title')}</h3>
-      {response.providers.length === 0
-        ? <p>{t('state.empty')}</p>
-        : (
-          <table className={css.table}>
-            <thead>
-              <tr>
-                <th scope="col" aria-label={t('providers.title')} />
-                <th scope="col">{t('buckets.uncachedInput')}</th>
-                <th scope="col">{t('buckets.output')}</th>
-                <th scope="col">{t('buckets.cacheRead')}</th>
-                <th scope="col">{t('buckets.cacheWrite')}</th>
-                <th scope="col">{t('estimate.title')}</th>
-                <th scope="col">{t('share.of')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {response.providers.map(provider => {
-                const open = !collapsed.has(provider.provider)
-                const usd = providerUsd(provider)
-                return (
-                  <Fragment key={provider.provider}>
-                    <tr>
-                      <th scope="row" onClick={() => { toggleProvider(provider.provider) }}>{provider.displayName}</th>
-                      <td>{formatTokens(provider.buckets.uncachedInputTokens)}</td>
-                      <td>{formatTokens(provider.buckets.outputTokens)}</td>
-                      <td>{formatTokens(provider.buckets.cacheReadTokens)}</td>
-                      <td>{formatTokens(provider.buckets.cacheWriteTokens)}</td>
-                      <td>{usd === undefined ? '—' : formatUsd(usd)}</td>
-                      <td>
-                        <div className={css.bar}>
-                          <span className={css.barFill} style={{ width: Math.round(provider.share * 100) + '%' }} />
-                        </div>
-                      </td>
-                    </tr>
-                    {open
-                      ? (
-                        <tr>
-                          <td colSpan={7}>
-                            <table className={css.table}>
-                              <thead>
-                                <tr>
-                                  <th scope="col">{t('models.title')}</th>
-                                  <th scope="col">{t('buckets.uncachedInput')}</th>
-                                  <th scope="col">{t('buckets.output')}</th>
-                                  <th scope="col">{t('buckets.cacheRead')}</th>
-                                  <th scope="col">{t('buckets.cacheWrite')}</th>
-                                  <th scope="col">{t('estimate.title')}</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {provider.models.map(model => (
-                                  <tr key={model.model}>
-                                    <td>
-                                      {model.displayName}
-                                      {model.aliases.length > 0
-                                        ? <span>{' (' + model.aliases.join(', ') + ')'}</span>
-                                        : null}
-                                    </td>
-                                    <td>{formatTokens(model.buckets.uncachedInputTokens)}</td>
-                                    <td>{formatTokens(model.buckets.outputTokens)}</td>
-                                    <td>{formatTokens(model.buckets.cacheReadTokens)}</td>
-                                    <td>{formatTokens(model.buckets.cacheWriteTokens)}</td>
-                                    <td>{model.usd === undefined ? '—' : formatUsd(model.usd)}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </td>
-                        </tr>
-                      )
-                      : null}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
+      <div className={css.analysisGrid}>
+        <section className={css.panel} aria-labelledby="usage-daily-title">
+          <div className={css.panelHeader}><h3 id="usage-daily-title">{t('daily.title')}</h3><span>{daily.length + ' / ' + DAILY_DAYS}</span></div>
+          {daily.length === 0 ? <p>{t('state.empty')}</p> : <><div className={css.daily} role="list" aria-label={t('daily.title')}>{daily.map(day => { const dayTotal = usageTotal(day.buckets); const height = dailyMax > 0 ? Math.round((dayTotal / dailyMax) * 100) : 0; return <div key={day.date} className={css.column} style={{ height: height + '%' }} title={day.date + ' · ' + formatTokens(dayTotal)} aria-label={day.date + ' · ' + formatTokens(dayTotal)} role="listitem" /> })}</div><div className={css.dailyAxis}><span>{daily[0]?.date}</span><span>{daily.at(-1)?.date}</span></div></>}
+        </section>
 
-      <h3>{t('daily.title')}</h3>
-      {daily.length === 0
-        ? <p>{t('state.empty')}</p>
-        : (
-          <div className={css.daily}>
-            {daily.map(day => {
-              const dayTotal = usageTotal(day.buckets)
-              const height = dailyMax > 0 ? Math.round((dayTotal / dailyMax) * 100) : 0
-              return (
-                <div
-                  key={day.date}
-                  className={css.column}
-                  style={{ height: height + '%' }}
-                  title={day.date + ' · ' + formatTokens(dayTotal)}
-                />
-              )
+        <section className={css.panel} aria-labelledby="usage-providers-title">
+          <div className={css.panelHeader}><h3 id="usage-providers-title">{t('providers.title')}</h3><span>{response.providers.length}</span></div>
+          {response.providers.length === 0 ? <p>{t('state.empty')}</p> : <div className={css.tableFrame}><table className={css.table}><thead><tr><th scope="col">{t('providers.title')}</th><th scope="col">{t('summary.totalTokens')}</th><th scope="col">{t('estimate.title')}</th><th scope="col">{t('share.of')}</th></tr></thead><tbody>
+            {response.providers.map(provider => {
+              const open = expandedProviders.has(provider.provider)
+              const usd = providerUsd(provider)
+              const detailId = 'usage-provider-' + provider.provider
+              return <Fragment key={provider.provider}><tr><th scope="row"><button type="button" className={css.providerToggle} aria-expanded={open} aria-controls={detailId} aria-label={open ? t('providers.collapse', { name: provider.displayName }) : t('providers.expand', { name: provider.displayName })} onClick={() => { toggleProvider(provider.provider) }}><span>{provider.displayName}</span><span className={css.modelCount}>{t('providers.modelCount', { count: provider.models.length })}</span></button></th><td>{formatTokens(usageTotal(provider.buckets))}</td><td>{usd === undefined ? '—' : formatUsd(usd)}</td><td><div className={css.shareCell}><span>{formatPercent(provider.share)}</span><div className={css.bar} aria-hidden="true"><span className={css.barFill} style={{ width: formatPercent(provider.share) }} /></div></div></td></tr>
+                {open ? <tr id={detailId} className={css.detailRow}><td colSpan={4}><div className={css.modelList} aria-label={t('models.title')}>{provider.models.map(model => <div key={model.model} className={css.modelRow}><div><strong>{model.displayName}</strong>{model.aliases.length > 0 ? <span className={css.aliases}>{model.aliases.join(', ')}</span> : null}</div><span>{formatTokens(usageTotal(model.buckets))}</span><span>{model.usd === undefined ? '—' : formatUsd(model.usd)}</span></div>)}</div></td></tr> : null}
+              </Fragment>
             })}
-          </div>
-        )}
+          </tbody></table></div>}
+        </section>
+      </div>
 
-      <h3>{t('sessions.title')}</h3>
-      {response.topSessions.length === 0
-        ? <p>{t('state.empty')}</p>
-        : (
-          <table className={css.table}>
-            <thead>
-              <tr>
-                <th scope="col" aria-label={t('sessions.title')} />
-                <th scope="col">{t('buckets.uncachedInput')}</th>
-                <th scope="col">{t('buckets.output')}</th>
-                <th scope="col">{t('buckets.cacheRead')}</th>
-                <th scope="col">{t('buckets.cacheWrite')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {response.topSessions.map(session => (
-                <tr key={session.sessionId}>
-                  <th scope="row">
-                    {session.title ?? t('sessions.untitled')}
-                    {session.cwd !== undefined ? <span>{' ' + pathTail(session.cwd)}</span> : null}
-                  </th>
-                  <td>{formatTokens(session.buckets.uncachedInputTokens)}</td>
-                  <td>{formatTokens(session.buckets.outputTokens)}</td>
-                  <td>{formatTokens(session.buckets.cacheReadTokens)}</td>
-                  <td>{formatTokens(session.buckets.cacheWriteTokens)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+      <section className={css.panel} aria-labelledby="usage-sessions-title">
+        <div className={css.panelHeader}><h3 id="usage-sessions-title">{t('sessions.title')}</h3><span>{response.topSessions.length}</span></div>
+        {response.topSessions.length === 0 ? <p>{t('state.empty')}</p> : <div className={css.tableFrame}><table className={css.table}><thead><tr><th scope="col">{t('sessions.title')}</th><th scope="col">{t('summary.totalTokens')}</th></tr></thead><tbody>{response.topSessions.map(session => <tr key={session.sessionId}><th scope="row"><span>{session.title ?? t('sessions.untitled')}</span>{session.cwd === undefined ? null : <span className={css.sessionPath}>{pathTail(session.cwd)}</span>}</th><td>{formatTokens(usageTotal(session.buckets))}</td></tr>)}</tbody></table></div>}
+      </section>
 
-      {response.unpricedModels.length > 0
-        ? <p className={css.notice}>{t('unpriced.intro')}</p>
-        : null}
+      {response.unpricedModels.length > 0 ? <p className={css.notice}>{t('unpriced.intro')}</p> : null}
     </div>
   )
 }

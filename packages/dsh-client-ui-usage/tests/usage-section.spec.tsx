@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { UsageSection } from '../src/client/UsageSection.tsx'
 import { zh } from '../src/client/locales.ts'
 import type { UsageSummaryResponse } from 'dsh-usage-host/shared'
@@ -45,10 +45,22 @@ function mount(response: UsageSummaryResponse, fetchSummary = vi.fn().mockResolv
 describe('UsageSection', () => {
   afterEach(() => { cleanup() })
 
-  it('renders provider rows with model detail and estimate', async () => {
+  it('keeps model detail collapsed until the provider is expanded', async () => {
     mount(SUMMARY)
-    await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy())
+    const toggle = await screen.findByRole('button', { name: '展开 DeepSeek 的模型明细' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('DeepSeek V4 Flash')).toBeNull()
+
+    fireEvent.click(toggle)
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText('DeepSeek V4 Flash')).toBeTruthy()
+  })
+
+  it('renders a compact overview with a token breakdown and session totals', async () => {
+    mount(SUMMARY)
+    await screen.findByText('Token 构成')
+    expect(screen.getAllByRole('columnheader', { name: '总 Token' }).length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText('大项目')).toBeTruthy()
   })
 
@@ -75,7 +87,7 @@ describe('UsageSection', () => {
       }],
     }
     mount(unpriced)
-    await waitFor(() => expect(screen.getByText(/goblin-9x/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(t('unpriced.intro'))).toBeTruthy())
   })
 
   it('shows the error state with retry after a failed fetch', async () => {
