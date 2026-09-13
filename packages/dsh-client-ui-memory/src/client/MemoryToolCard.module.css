@@ -1,28 +1,72 @@
-/* Inline memory card: one compact row, payload expands below. */
+/* Memory card, A1 style: one quiet row; the result drawer is an indented
+   hairline quote, no chrome. Colors ride theme custom properties with safe
+   fallbacks so the card reads on any surface. */
 
 .card {
+  min-width: 0;
+  font-size: 0.78125rem;
+  line-height: 1.125rem;
+  border-radius: 0.5rem;
+}
+
+.row {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.375rem;
-  padding: 0.25rem 0.5rem;
-  border-inline-start: 2px solid var(--dsh-border, #d0d4dc);
-  font-size: 0.875rem;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.3125rem 0.5rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: start;
   min-width: 0;
 }
 
-.card[data-error] {
-  border-inline-start-color: var(--dsh-danger, #d05252);
+button.row {
+  cursor: pointer;
+  transition: background-color 120ms ease;
 }
 
-.glyph {
+button.row:hover {
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+button.row:focus-visible {
+  outline: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  outline-offset: -1px;
+}
+
+.icon {
   flex: none;
+  color: var(--dsw-alias-label-tertiary, color-mix(in srgb, currentColor 52%, transparent));
+}
+
+.card[data-error] .icon {
+  color: var(--dsh-danger, #d05252);
+}
+
+.chev {
+  flex: none;
+  margin-left: auto;
+  color: var(--dsw-alias-label-quaternary, color-mix(in srgb, currentColor 38%, transparent));
+  transition: transform 160ms ease;
+}
+
+.card[data-open] .chev {
+  transform: rotate(180deg);
 }
 
 .action {
   flex: none;
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
+}
+
+.card[data-error] .action,
+.card[data-error] .headline {
+  color: var(--dsh-danger, #d05252);
 }
 
 .state {
@@ -33,7 +77,6 @@
 
 .headline {
   flex: 0 1 auto;
-  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -41,17 +84,21 @@
 
 .count {
   flex: none;
-  opacity: 0.7;
+  padding: 0 0.4375rem;
+  border-radius: 99px;
+  font-size: 0.6875rem;
   white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary, color-mix(in srgb, currentColor 52%, transparent));
+  background: color-mix(in srgb, currentColor 5.5%, transparent);
 }
 
 .detail {
-  flex: 1 1 12rem;
+  flex: 0 1 14rem;
   min-width: 0;
-  opacity: 0.75;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary, color-mix(in srgb, currentColor 52%, transparent));
 }
 
 .empty {
@@ -59,27 +106,31 @@
   opacity: 0.5;
 }
 
-.toggle {
-  flex: none;
-  border: none;
-  background: none;
-  padding: 0;
-  font: inherit;
-  font-size: 0.8125rem;
-  color: var(--dsh-link, #3b6ef5);
-  cursor: pointer;
+/* The drawer: an indented hairline quote aligned under the row text
+   (row padding 8px + icon 14px + gap 8px = 30px). Entry is a short
+   settle-down; the row itself already signals state via the chevron. */
+.drawer {
+  margin: 0.125rem 0.5rem 0.25rem 1.875rem;
+  padding-left: 0.625rem;
+  border-left: 2px solid color-mix(in srgb, currentColor 12%, transparent);
+  animation: memory-card-drawer-in 160ms ease;
+}
+
+@keyframes memory-card-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
 }
 
 .payload {
-  flex-basis: 100%;
-  margin: 0.25rem 0 0;
-  padding: 0.5rem;
-  border-radius: 0.375rem;
-  background: color-mix(in srgb, currentColor 6%, transparent);
-  font-size: 0.75rem;
-  line-height: 1.45;
+  margin: 0;
+  font-family: var(--dsh-font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
+  font-size: 0.65625rem;
+  line-height: 1rem;
+  color: var(--dsw-alias-label-secondary, color-mix(in srgb, currentColor 72%, transparent));
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 16rem;
+  max-height: 12rem;
   overflow: auto;
 }

@@ -38,7 +38,15 @@ function settledProps(toolName: string, args: Record<string, unknown>, resultTex
 }
 
 describe('glance row', () => {
-  it('renders the action label and headline of a save', () => {
+  it('renders an SVG icon instead of an emoji glyph', () => {
+    const { container } = render(
+      <MemoryToolCard {...settledProps('mcp__engram__mem_save', { title: 'JWT auth', content: 'uses refresh rotation' }, '{"id":"obs-1"}')} />,
+    )
+    expect(container.querySelector('svg')).not.toBeNull()
+    expect(container.textContent).not.toContain('\u{1F4BE}')
+  })
+
+  it('renders the action label, headline, and muted content preview of a save', () => {
     render(<MemoryToolCard {...settledProps('mcp__engram__mem_save', { title: 'JWT auth', content: 'uses refresh rotation' }, '{"id":"obs-1"}')} />)
     expect(screen.getByText(t('card.action.mem_save'))).toBeTruthy()
     expect(screen.getByText('JWT auth')).toBeTruthy()
@@ -71,17 +79,31 @@ describe('glance row', () => {
 })
 
 describe('expand toggle', () => {
-  it('reveals the full result payload and collapses back', () => {
+  it('toggles the payload from the row itself with reflected aria state', () => {
     const result = JSON.stringify([{ id: 'obs-1', title: 'one' }])
     const { container } = render(<MemoryToolCard {...settledProps('mcp__engram__mem_search', { query: 'q' }, result)} />)
-    expect(container.querySelector('pre')).toBeNull()
-    fireEvent.click(screen.getByText(t('card.expand')))
+    // The row is the button: the headline lives inside it, with a chevron.
+    const row = screen.getByText('q').closest('button')
+    expect(row).not.toBeNull()
+    expect(row?.getAttribute('aria-expanded')).toBe('false')
+    expect(row?.querySelector('svg')).not.toBeNull()
+    fireEvent.click(row!)
+    expect(row?.getAttribute('aria-expanded')).toBe('true')
     expect(container.querySelector('pre')?.textContent).toBe(result)
-    fireEvent.click(screen.getByText(t('card.collapse')))
+    fireEvent.click(row!)
+    expect(row?.getAttribute('aria-expanded')).toBe('false')
     expect(container.querySelector('pre')).toBeNull()
   })
 
-  it('renders the empty marker for a settled call without content', () => {
+  it('labels the toggle for assistive tech via the expand/collapse keys', () => {
+    const result = '{"id":"obs-1"}'
+    render(<MemoryToolCard {...settledProps('mcp__engram__mem_save', { title: 'T', content: 'c' }, result)} />)
+    expect(screen.getByRole('button', { name: t('card.expand') })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: t('card.expand') }))
+    expect(screen.getByRole('button', { name: t('card.collapse') })).toBeTruthy()
+  })
+
+  it('renders the empty marker and no toggle for a settled call without content', () => {
     render(<MemoryToolCard {...{
       callId: 'call-1',
       toolName: 'mcp__engram__mem_stats',
@@ -93,6 +115,6 @@ describe('expand toggle', () => {
       t,
     }} />)
     expect(screen.getByText(t('card.empty'))).toBeTruthy()
-    expect(screen.queryByText(t('card.expand'))).toBeNull()
+    expect(screen.queryByRole('button')).toBeNull()
   })
 })
