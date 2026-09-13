@@ -1,0 +1,7 @@
+# dsh-usage-host bundle layer: the usage domain service plus its webServer
+# summary route. All config fields are optional — the UsageService wires
+# sensible defaults (~/.dsh/storages/usage-host/{models.json,index.json},
+# refreshMs 30s); a user patch may override by entry id.
+- insert:
+    - id: usage-host
+      name: './lib/index.js'

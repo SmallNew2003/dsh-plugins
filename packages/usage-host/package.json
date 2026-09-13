@@ -6,6 +6,7 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "exports": {
     ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" },
     "./shared": { "types": "./lib/types/shared.d.ts", "default": "./lib/types/shared.js" },
