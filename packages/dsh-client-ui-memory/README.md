@@ -27,7 +27,7 @@ engram 记忆 MCP 工具调用在 DSH Web 转录中的内联卡片。每个 `mcp
 
 ```sh
 pnpm --filter dsh-client-ui-memory build
-dsh plugin --profile web add /Users/jelvin/000_source_code/dsh-plugins/packages/client-ui-memory
+dsh plugin --profile web add /Users/jelvin/000_source_code/dsh-plugins/packages/dsh-client-ui-memory
 ```
 
 包声明 `dsh.bundle.patch`（插入 node half seat）与 `dsh.client`（浏览器半经

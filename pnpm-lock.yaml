@@ -24,7 +24,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.2)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)
 
-  packages/client-ui-git:
+  packages/dsh-client-ui-git:
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: link:../../../deepseek-harness/vendor/cordis
@@ -58,7 +58,7 @@ importers:
         version: 18.3.7(@types/react@18.3.31)
       dsh-git-host:
         specifier: workspace:^
-        version: link:../git-host
+        version: link:../dsh-git-host
       jsdom:
         specifier: ^25.0.0
         version: 25.0.1
@@ -81,7 +81,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.2)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)
 
-  packages/client-ui-memory:
+  packages/dsh-client-ui-memory:
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: link:../../../deepseek-harness/vendor/cordis
@@ -132,7 +132,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.2)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)
 
-  packages/client-ui-usage:
+  packages/dsh-client-ui-usage:
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: link:../../../deepseek-harness/vendor/cordis
@@ -169,7 +169,7 @@ importers:
         version: 18.3.7(@types/react@18.3.31)
       dsh-usage-host:
         specifier: workspace:^
-        version: link:../usage-host
+        version: link:../dsh-usage-host
       jsdom:
         specifier: ^25.0.0
         version: 25.0.1
@@ -192,7 +192,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.2)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)
 
-  packages/git-host:
+  packages/dsh-git-host:
     dependencies:
       '@deepseek-ai/schemastery':
         specifier: link:../../../deepseek-harness/vendor/schemastery
@@ -223,7 +223,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.2)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)
 
-  packages/tool-git-worktree:
+  packages/dsh-tool-git-worktree:
     dependencies:
       '@deepseek-ai/dsh-tools':
         specifier: link:../../../deepseek-harness/packages/core/tools
@@ -237,7 +237,7 @@ importers:
         version: link:../../../deepseek-harness/packages/core/system-prompt
       dsh-git-host:
         specifier: workspace:^
-        version: link:../git-host
+        version: link:../dsh-git-host
       tsdown:
         specifier: ^0.12.0
         version: 0.12.9(typescript@5.9.3)
@@ -248,7 +248,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.2)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)
 
-  packages/usage-host:
+  packages/dsh-usage-host:
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: link:../../../deepseek-harness/vendor/cordis

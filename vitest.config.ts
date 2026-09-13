@@ -5,9 +5,9 @@ export default defineConfig({
   test: {
     include: ['packages/*/tests/**/*.spec.ts', 'packages/*/tests/**/*.spec.tsx'],
     environmentMatchGlobs: [
-      ['packages/client-ui-git/tests/**', 'jsdom'],
-      ['packages/client-ui-memory/tests/**', 'jsdom'],
-      ['packages/client-ui-usage/tests/**', 'jsdom'],
+      ['packages/dsh-client-ui-git/tests/**', 'jsdom'],
+      ['packages/dsh-client-ui-memory/tests/**', 'jsdom'],
+      ['packages/dsh-client-ui-usage/tests/**', 'jsdom'],
     ],
   },
 })
