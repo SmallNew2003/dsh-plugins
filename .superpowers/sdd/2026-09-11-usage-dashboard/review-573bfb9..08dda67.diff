@@ -1,0 +1,700 @@
+# Review package: 573bfb9..HEAD
+
+## Commits
+08dda67 feat(client-ui-usage): settings usage-statistics section
+
+## Files changed
+ .../src/client/UsageSection.module.css             | 111 ++++++++
+ .../client-ui-usage/src/client/UsageSection.tsx    | 316 +++++++++++++++++++++
+ .../client-ui-usage/src/client/css-modules.d.ts    |   4 +
+ packages/client-ui-usage/src/client/index.ts       |  77 ++++-
+ packages/client-ui-usage/src/client/locales.ts     |   4 +
+ .../client-ui-usage/tests/usage-section.spec.tsx   |  84 ++++++
+ 6 files changed, 595 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/packages/client-ui-usage/src/client/UsageSection.module.css b/packages/client-ui-usage/src/client/UsageSection.module.css
+new file mode 100644
+index 0000000..abdf366
+--- /dev/null
++++ b/packages/client-ui-usage/src/client/UsageSection.module.css
+@@ -0,0 +1,111 @@
++.section {
++  display: flex;
++  flex-direction: column;
++  gap: 16px;
++  min-width: 0;
++}
++
++.cards {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 12px;
++}
++
++.card {
++  display: flex;
++  flex-direction: column;
++  gap: 4px;
++  min-width: 96px;
++  padding: 10px 12px;
++  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
++  border-radius: 8px;
++}
++
++.cardLabel {
++  font-size: 12px;
++  opacity: 0.65;
++}
++
++.cardValue {
++  font-size: 18px;
++  font-variant-numeric: tabular-nums;
++}
++
++.table {
++  width: 100%;
++  border-collapse: collapse;
++  font-variant-numeric: tabular-nums;
++}
++
++.table th,
++.table td {
++  padding: 4px 8px;
++  text-align: right;
++  border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
++}
++
++.table th:first-child,
++.table td:first-child {
++  text-align: left;
++}
++
++.table .table {
++  margin: 4px 0;
++}
++
++.table .table th,
++.table .table td {
++  border-bottom: none;
++  padding: 2px 8px;
++}
++
++.bar {
++  min-width: 80px;
++  height: 6px;
++  overflow: hidden;
++  background: color-mix(in srgb, currentColor 12%, transparent);
++  border-radius: 3px;
++}
++
++.barFill {
++  display: block;
++  height: 100%;
++  background: currentColor;
++}
++
++.daily {
++  display: flex;
++  align-items: flex-end;
++  gap: 2px;
++  height: 96px;
++}
++
++.column {
++  flex: 1;
++  min-width: 4px;
++  background: currentColor;
++  opacity: 0.75;
++  border-radius: 2px 2px 0 0;
++}
++
++.notice {
++  padding: 8px 12px;
++  background: color-mix(in srgb, #f0b429 18%, transparent);
++  border-radius: 8px;
++}
++
++.error {
++  display: flex;
++  align-items: center;
++  gap: 12px;
++  color: #d64545;
++}
++
++.retry {
++  padding: 4px 12px;
++  border: 1px solid currentColor;
++  border-radius: 6px;
++  background: none;
++  color: inherit;
++  cursor: pointer;
++}
+diff --git a/packages/client-ui-usage/src/client/UsageSection.tsx b/packages/client-ui-usage/src/client/UsageSection.tsx
+new file mode 100644
+index 0000000..0527f04
+--- /dev/null
++++ b/packages/client-ui-usage/src/client/UsageSection.tsx
+@@ -0,0 +1,316 @@
++/**
++ * Usage settings section: summary cards, the provider share table with
++ * expandable model breakdown, the daily bar chart, and the top-sessions
++ * table. Data arrives through the inject face (one shared UsageController);
++ * while the host reports a scan in progress the section re-polls on a fixed
++ * cadence, and a failed read degrades to an inline error with retry.
++ *
++ * @module dsh-client-ui-usage/UsageSection
++ */
++
++import { Fragment, useEffect, useState } from 'react'
++import type { ProviderUsageRow, UsageBuckets, UsageSummaryResponse } from 'dsh-usage-host/shared'
++import type { InjectFace, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
++import type { UsageController } from './controller.ts'
++import { NS } from './locales.ts'
++import css from './UsageSection.module.css'
++
++/** Injected dependencies of {@link UsageSection} (the slot inject face). */
++export interface UsageSectionInjected {
++  /** Data carrier for the usage summary route; one instance per plugin life. */
++  readonly controller: UsageController
++  /** The usage-namespace translator. */
++  readonly t: TranslateNS<typeof NS>
++}
++
++/**
++ * Props delivered by the slot outlet: the inject face spread flat, each
++ * member optional until the shell injects — a direct render without the face
++ * mounts nothing (the ui-settings-models pattern).
++ */
++export type UsageSectionProps = Partial<InjectFace<UsageSectionInjected>>
++
++/** Re-poll cadence while the host reports a background scan. */
++const POLL_MS = 5_000
++
++/** How many most-recent days the chart renders. */
++const DAILY_DAYS = 30
++
++/** ≥1e6 → x.xM; ≥1e3 → x.xK; else the integer itself. */
++function formatTokens(count: number): string {
++  if (count >= 1e6) return (count / 1e6).toFixed(1) + 'M'
++  if (count >= 1e3) return (count / 1e3).toFixed(1) + 'K'
++  return String(count)
++}
++
++/** Two-decimal USD amount. */
++function formatUsd(amount: number): string {
++  return '$' + amount.toFixed(2)
++}
++
++/** Sum of the four disjoint buckets — the share denominator and bar unit. */
++function bucketTotal(buckets: UsageBuckets): number {
++  return buckets.uncachedInputTokens + buckets.outputTokens + buckets.cacheReadTokens + buckets.cacheWriteTokens
++}
++
++/** One provider's priced amount: the sum of its models' estimates (undefined = none priced). */
++function providerUsd(row: ProviderUsageRow): number | undefined {
++  let sum = 0
++  let priced = false
++  for (const model of row.models) {
++    if (model.usd !== undefined) {
++      sum += model.usd
++      priced = true
++    }
++  }
++  return priced ? sum : undefined
++}
++
++/** Final path segment — the cwd tail the sessions table shows. */
++function pathTail(path: string): string {
++  const index = path.lastIndexOf('/')
++  return index === -1 ? path : path.slice(index + 1)
++}
++
++/**
++ * Render the usage statistics section content.
++ * @param props - slot-delivered injected dependencies.
++ * @returns the section, or null while the shell has not injected yet.
++ */
++export function UsageSection(props: UsageSectionProps) {
++  const { controller, t } = props
++  const [response, setResponse] = useState<UsageSummaryResponse | undefined>(undefined)
++  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
++  // Keys of providers whose model breakdown the user collapsed; a provider
++  // absent from the set renders expanded.
++  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
++  // Bumped by the retry button; the load effect re-runs with a fresh read.
++  const [reload, setReload] = useState(0)
++
++  useEffect(() => {
++    if (controller === undefined) return
++    let cancelled = false
++    let timer: ReturnType<typeof setTimeout> | undefined
++    const load = async (): Promise<void> => {
++      try {
++        const next = await controller.fetchSummary()
++        if (cancelled) return
++        setResponse(next)
++        setStatus('ready')
++        // Scan in progress: re-poll on the fixed cadence until it settles.
++        if (next.scanning) timer = setTimeout(() => { void load() }, POLL_MS)
++      } catch {
++        if (!cancelled) setStatus('error')
++      }
++    }
++    void load()
++    return () => {
++      cancelled = true
++      if (timer !== undefined) clearTimeout(timer)
++    }
++  }, [controller, reload])
++
++  if (controller === undefined || t === undefined) return null
++
++  const toggleProvider = (key: string): void => {
++    setCollapsed(current => {
++      const next = new Set(current)
++      if (next.has(key)) next.delete(key)
++      else next.add(key)
++      return next
++    })
++  }
++
++  if (status === 'error') {
++    return (
++      <div className={css.section}>
++        <div className={css.error}>
++          <p>{t('state.error')}</p>
++          <button type="button" className={css.retry} onClick={() => { setReload(current => current + 1) }}>
++            {t('state.retry')}
++          </button>
++        </div>
++      </div>
++    )
++  }
++
++  if (response === undefined) {
++    return <div className={css.section}><p>{t('state.scanning')}</p></div>
++  }
++
++  const totals = response.totals
++  const daily = response.daily.slice(-DAILY_DAYS)
++  const dailyMax = Math.max(0, ...daily.map(day => bucketTotal(day.buckets)))
++
++  return (
++    <div className={css.section}>
++      <h2>{t('summary.title')}</h2>
++      {response.scanning ? <p>{t('state.scanning')}</p> : null}
++      <div className={css.cards}>
++        <div className={css.card}>
++          <span className={css.cardLabel}>{t('buckets.uncachedInput')}</span>
++          <span className={css.cardValue}>{formatTokens(totals.uncachedInputTokens)}</span>
++        </div>
++        <div className={css.card}>
++          <span className={css.cardLabel}>{t('buckets.output')}</span>
++          <span className={css.cardValue}>{formatTokens(totals.outputTokens)}</span>
++        </div>
++        <div className={css.card}>
++          <span className={css.cardLabel}>{t('buckets.cacheRead')}</span>
++          <span className={css.cardValue}>{formatTokens(totals.cacheReadTokens)}</span>
++        </div>
++        <div className={css.card}>
++          <span className={css.cardLabel}>{t('buckets.cacheWrite')}</span>
++          <span className={css.cardValue}>{formatTokens(totals.cacheWriteTokens)}</span>
++        </div>
++        <div className={css.card}>
++          <span className={css.cardLabel}>{t('buckets.total')}</span>
++          <span className={css.cardValue}>{formatTokens(bucketTotal(totals))}</span>
++        </div>
++        {response.estimate !== undefined
++          ? (
++            <div className={css.card}>
++              <span className={css.cardLabel}>{t('estimate.title')}</span>
++              <span className={css.cardValue}>{formatUsd(response.estimate.totalUsd)}</span>
++              <span className={css.cardLabel}>{t('estimate.disclaimer')}</span>
++            </div>
++          )
++          : null}
++      </div>
++
++      <h3>{t('providers.title')}</h3>
++      {response.providers.length === 0
++        ? <p>{t('state.empty')}</p>
++        : (
++          <table className={css.table}>
++            <thead>
++              <tr>
++                <th scope="col" aria-label={t('providers.title')} />
++                <th scope="col">{t('buckets.uncachedInput')}</th>
++                <th scope="col">{t('buckets.output')}</th>
++                <th scope="col">{t('buckets.cacheRead')}</th>
++                <th scope="col">{t('buckets.cacheWrite')}</th>
++                <th scope="col">{t('estimate.title')}</th>
++                <th scope="col">{t('share.of')}</th>
++              </tr>
++            </thead>
++            <tbody>
++              {response.providers.map(provider => {
++                const open = !collapsed.has(provider.provider)
++                const usd = providerUsd(provider)
++                return (
++                  <Fragment key={provider.provider}>
++                    <tr>
++                      <th scope="row" onClick={() => { toggleProvider(provider.provider) }}>{provider.displayName}</th>
++                      <td>{formatTokens(provider.buckets.uncachedInputTokens)}</td>
++                      <td>{formatTokens(provider.buckets.outputTokens)}</td>
++                      <td>{formatTokens(provider.buckets.cacheReadTokens)}</td>
++                      <td>{formatTokens(provider.buckets.cacheWriteTokens)}</td>
++                      <td>{usd === undefined ? '—' : formatUsd(usd)}</td>
++                      <td>
++                        <div className={css.bar}>
++                          <span className={css.barFill} style={{ width: Math.round(provider.share * 100) + '%' }} />
++                        </div>
++                      </td>
++                    </tr>
++                    {open
++                      ? (
++                        <tr>
++                          <td colSpan={7}>
++                            <table className={css.table}>
++                              <thead>
++                                <tr>
++                                  <th scope="col">{t('models.title')}</th>
++                                  <th scope="col">{t('buckets.uncachedInput')}</th>
++                                  <th scope="col">{t('buckets.output')}</th>
++                                  <th scope="col">{t('buckets.cacheRead')}</th>
++                                  <th scope="col">{t('buckets.cacheWrite')}</th>
++                                  <th scope="col">{t('estimate.title')}</th>
++                                </tr>
++                              </thead>
++                              <tbody>
++                                {provider.models.map(model => (
++                                  <tr key={model.model}>
++                                    <td>
++                                      {model.displayName}
++                                      {model.aliases.length > 0
++                                        ? <span>{' (' + model.aliases.join(', ') + ')'}</span>
++                                        : null}
++                                    </td>
++                                    <td>{formatTokens(model.buckets.uncachedInputTokens)}</td>
++                                    <td>{formatTokens(model.buckets.outputTokens)}</td>
++                                    <td>{formatTokens(model.buckets.cacheReadTokens)}</td>
++                                    <td>{formatTokens(model.buckets.cacheWriteTokens)}</td>
++                                    <td>{model.usd === undefined ? '—' : formatUsd(model.usd)}</td>
++                                  </tr>
++                                ))}
++                              </tbody>
++                            </table>
++                          </td>
++                        </tr>
++                      )
++                      : null}
++                  </Fragment>
++                )
++              })}
++            </tbody>
++          </table>
++        )}
++
++      <h3>{t('daily.title')}</h3>
++      {daily.length === 0
++        ? <p>{t('state.empty')}</p>
++        : (
++          <div className={css.daily}>
++            {daily.map(day => {
++              const dayTotal = bucketTotal(day.buckets)
++              const height = dailyMax > 0 ? Math.round((dayTotal / dailyMax) * 100) : 0
++              return (
++                <div
++                  key={day.date}
++                  className={css.column}
++                  style={{ height: height + '%' }}
++                  title={day.date + ' · ' + formatTokens(dayTotal)}
++                />
++              )
++            })}
++          </div>
++        )}
++
++      <h3>{t('sessions.title')}</h3>
++      {response.topSessions.length === 0
++        ? <p>{t('state.empty')}</p>
++        : (
++          <table className={css.table}>
++            <thead>
++              <tr>
++                <th scope="col" aria-label={t('sessions.title')} />
++                <th scope="col">{t('buckets.uncachedInput')}</th>
++                <th scope="col">{t('buckets.output')}</th>
++                <th scope="col">{t('buckets.cacheRead')}</th>
++                <th scope="col">{t('buckets.cacheWrite')}</th>
++              </tr>
++            </thead>
++            <tbody>
++              {response.topSessions.map(session => (
++                <tr key={session.sessionId}>
++                  <th scope="row">
++                    {session.title ?? t('sessions.untitled')}
++                    {session.cwd !== undefined ? <span>{' ' + pathTail(session.cwd)}</span> : null}
++                  </th>
++                  <td>{formatTokens(session.buckets.uncachedInputTokens)}</td>
++                  <td>{formatTokens(session.buckets.outputTokens)}</td>
++                  <td>{formatTokens(session.buckets.cacheReadTokens)}</td>
++                  <td>{formatTokens(session.buckets.cacheWriteTokens)}</td>
++                </tr>
++              ))}
++            </tbody>
++          </table>
++        )}
++
++      {response.unpricedModels.length > 0
++        ? <p className={css.notice}>{t('unpriced.intro')}</p>
++        : null}
++    </div>
++  )
++}
+diff --git a/packages/client-ui-usage/src/client/css-modules.d.ts b/packages/client-ui-usage/src/client/css-modules.d.ts
+new file mode 100644
+index 0000000..24a27bd
+--- /dev/null
++++ b/packages/client-ui-usage/src/client/css-modules.d.ts
+@@ -0,0 +1,4 @@
++declare module '*.module.css' {
++  const classes: Readonly<Record<string, string>>
++  export default classes
++}
+diff --git a/packages/client-ui-usage/src/client/index.ts b/packages/client-ui-usage/src/client/index.ts
+index 355ced4..980bf83 100644
+--- a/packages/client-ui-usage/src/client/index.ts
++++ b/packages/client-ui-usage/src/client/index.ts
+@@ -1 +1,76 @@
+-export function apply(): void {}
++/**
++ * Browser half: the usage settings section. Data rides the inject face (one
++ * shared UsageController); the shell renders nav chrome.
++ *
++ * @module dsh-client-ui-usage/client
++ */
++
++import type { Context as ClientContext } from '@deepseek-ai/cordis'
++// Type-only: the shell's SlotMap merge ('settings.section').
++import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
++// Type-only: the ctx.locale Context merge.
++import type {} from '@deepseek-ai/dsh-client-locale/client'
++import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
++import { UsageController } from './controller.ts'
++import { UsageSection } from './UsageSection.tsx'
++import { en, NS, zh } from './locales.ts'
++
++export type { UsageKey } from './locales.ts'
++
++declare module '@deepseek-ai/dsh-client-ui-slots' {
++  interface LocaleNamespaceMap {
++    usage: keyof typeof zh
++  }
++}
++
++/**
++ * Structural surface of the framework slot registry this plugin consumes.
++ * Local type-only view over the two consumed methods (the client-ui-git
++ * vendor-types precedent): the renderer package's client types are not built
++ * in this workspace, so ctx.slots is read through the open-in-app service
++ * access instead of the (currently unresolvable) Context merge. Erased at
++ * runtime; register parameters follow the settings.section contract.
++ */
++interface ClientSlots {
++  /** Contribute to one declared slot key; the callback registers this entry. */
++  inject(name: string, contribute: () => unknown): void
++  /** Register one entry into a declared slot key. */
++  register(options: {
++    readonly name: string
++    readonly id: string
++    readonly order: number
++    readonly label: () => string
++    readonly inject: () => UsageSectionInjected
++  }, component: unknown): unknown
++}
++
++/** Read a browser-side service by name with a local structural surface. */
++function serviceOf<T>(ctx: unknown, name: string): T {
++  return Reflect.get(ctx as { [key: string]: unknown }, name) as T
++}
++
++/** Required services (cordis fiber inject). */
++export const inject = ['slots', 'locale']
++
++/** Inject face consumed by UsageSection. */
++export interface UsageSectionInjected {
++  readonly controller: UsageController
++  readonly t: TranslateNS<typeof NS>
++}
++
++/** Register the usage section once the settings.section declaration commits. */
++export function apply(ctx: ClientContext): void {
++  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'client-ui-usage: dictionaries')
++
++  const slots = serviceOf<ClientSlots>(ctx, 'slots')
++  const controller = new UsageController()
++  const t = ctx.locale.bind(NS) as UsageSectionInjected['t']
++
++  slots.inject('settings.section', () => slots.register({
++    name: 'settings.section',
++    id: 'usage',
++    order: 40,
++    label: () => t('nav'),
++    inject: (): UsageSectionInjected => ({ controller, t }),
++  }, UsageSection))
++}
+diff --git a/packages/client-ui-usage/src/client/locales.ts b/packages/client-ui-usage/src/client/locales.ts
+index 4af5b20..a5a5921 100644
+--- a/packages/client-ui-usage/src/client/locales.ts
++++ b/packages/client-ui-usage/src/client/locales.ts
+@@ -14,55 +14,59 @@ export const NS = 'usage'
+ /** Simplified Chinese dictionary (the key-set source of truth). */
+ export const zh = {
+   'nav': '使用统计',
+   'summary.title': '用量总览',
+   'buckets.uncachedInput': '未缓存输入',
+   'buckets.output': '输出',
+   'buckets.cacheRead': '缓存读取',
+   'buckets.cacheWrite': '缓存写入',
+   'buckets.total': '总计',
+   'estimate.disclaimer': '金额为按价目表估算,可能与实际账单不一致',
++  'estimate.title': '估算金额',
+   'providers.title': '提供商',
+   'models.title': '模型',
+   'daily.title': '按日用量',
+   'sessions.title': '会话排行',
+   'sessions.untitled': '(无标题会话)',
+   'state.scanning': '正在扫描会话历史…',
+   'state.empty': '暂无用量数据',
+   'state.error': '用量数据加载失败',
+   'state.retry': '重试',
+   'state.serviceMissing': '使用统计服务未安装或未响应',
+   'unpriced.notice': '以下模型未配置单价,未计入金额:{models}',
++  'unpriced.intro': '以下模型未配置单价,未计入金额',
+   'share.of': '占比',
+ } as const
+ 
+ /** English dictionary, key-identical to the Chinese source of truth. */
+ export const en: Record<UsageKey, string> = {
+   'nav': 'Usage',
+   'summary.title': 'Usage overview',
+   'buckets.uncachedInput': 'Uncached input',
+   'buckets.output': 'Output',
+   'buckets.cacheRead': 'Cache read',
+   'buckets.cacheWrite': 'Cache write',
+   'buckets.total': 'Total',
+   'estimate.disclaimer': 'Amounts are estimated from the price list and may differ from actual billing',
++  'estimate.title': 'Estimated amount',
+   'providers.title': 'Providers',
+   'models.title': 'Models',
+   'daily.title': 'Daily usage',
+   'sessions.title': 'Top sessions',
+   'sessions.untitled': '(Untitled session)',
+   'state.scanning': 'Scanning session history…',
+   'state.empty': 'No usage data yet',
+   'state.error': 'Failed to load usage data',
+   'state.retry': 'Retry',
+   'state.serviceMissing': 'The usage service is not installed or not responding',
+   'unpriced.notice': 'The following models have no configured price and are not counted in amounts: {models}',
++  'unpriced.intro': 'The following models have no configured price and are not counted in amounts',
+   'share.of': 'Share',
+ }
+ 
+ /** Key domain of the usage namespace (zh is the source of truth). */
+ export type UsageKey = keyof typeof zh
+ 
+ declare module '@deepseek-ai/dsh-client-ui-slots' {
+   interface LocaleNamespaceMap {
+     usage: UsageKey
+   }
+diff --git a/packages/client-ui-usage/tests/usage-section.spec.tsx b/packages/client-ui-usage/tests/usage-section.spec.tsx
+new file mode 100644
+index 0000000..d9c0c32
+--- /dev/null
++++ b/packages/client-ui-usage/tests/usage-section.spec.tsx
+@@ -0,0 +1,84 @@
++import { describe, expect, it, vi } from 'vitest'
++import { render, screen, waitFor } from '@testing-library/react'
++import { UsageSection } from '../src/client/UsageSection.tsx'
++import { zh } from '../src/client/locales.ts'
++import type { UsageSummaryResponse } from 'dsh-usage-host/shared'
++
++const SUMMARY: UsageSummaryResponse = {
++  generatedAt: 0,
++  scanning: false,
++  sessionCount: 2,
++  skippedSessions: 0,
++  totals: { uncachedInputTokens: 1000, outputTokens: 500, cacheReadTokens: 2000, cacheWriteTokens: 0 },
++  providers: [{
++    provider: 'deepseek',
++    displayName: 'DeepSeek',
++    buckets: { uncachedInputTokens: 1000, outputTokens: 500, cacheReadTokens: 2000, cacheWriteTokens: 0 },
++    share: 1,
++    models: [{
++      model: 'deepseek-v4-flash',
++      displayName: 'DeepSeek V4 Flash',
++      recognized: true,
++      aliases: ['ds-v4-flash'],
++      buckets: { uncachedInputTokens: 1000, outputTokens: 500, cacheReadTokens: 2000, cacheWriteTokens: 0 },
++      usd: 0.83,
++    }],
++  }],
++  daily: [{ date: '2026-09-11', buckets: { uncachedInputTokens: 1000, outputTokens: 500, cacheReadTokens: 2000, cacheWriteTokens: 0 } }],
++  topSessions: [{ sessionId: 's1', title: '大项目', cwd: '/tmp/x', createdAt: 0, buckets: { uncachedInputTokens: 1000, outputTokens: 500, cacheReadTokens: 2000, cacheWriteTokens: 0 } }],
++  unpricedModels: [],
++  estimate: { totalUsd: 0.83 },
++}
++
++const t = (key: string, vars?: Record<string, string | number>): string => {
++  let text = (zh as Record<string, string>)[key] ?? key
++  for (const [name, value] of Object.entries(vars ?? {})) text = text.replaceAll('{' + name + '}', String(value))
++  return text
++}
++
++function mount(response: UsageSummaryResponse, fetchSummary = vi.fn().mockResolvedValue(response)) {
++  const controller = { fetchSummary } as never
++  render(<UsageSection controller={controller} t={t as never} />)
++  return fetchSummary
++}
++
++describe('UsageSection', () => {
++  it('renders provider rows with model detail and estimate', async () => {
++    mount(SUMMARY)
++    await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy())
++    expect(screen.getByText('DeepSeek V4 Flash')).toBeTruthy()
++    expect(screen.getByText('大项目')).toBeTruthy()
++  })
++
++  it('keeps polling while scanning and stops when settled', async () => {
++    vi.useFakeTimers()
++    const fetchSummary = vi.fn()
++      .mockResolvedValueOnce({ ...SUMMARY, scanning: true })
++      .mockResolvedValueOnce(SUMMARY)
++    mount(SUMMARY, fetchSummary)
++    await vi.advanceTimersByTimeAsync(5_000)
++    await vi.advanceTimersByTimeAsync(5_000)
++    vi.useRealTimers()
++    expect(fetchSummary).toHaveBeenCalledTimes(2)
++  })
++
++  it('renders the unpriced notice when models lack pricing', async () => {
++    const unpriced: UsageSummaryResponse = {
++      ...SUMMARY,
++      estimate: undefined,
++      unpricedModels: ['goblin-9x'],
++      providers: [{
++        ...SUMMARY.providers[0]!,
++        models: [{ model: 'goblin-9x', displayName: 'goblin-9x', recognized: false, aliases: [], buckets: SUMMARY.totals, usd: undefined }],
++      }],
++    }
++    mount(unpriced)
++    await waitFor(() => expect(screen.getByText(/goblin-9x/)).toBeTruthy())
++  })
++
++  it('shows the error state with retry after a failed fetch', async () => {
++    mount(SUMMARY, vi.fn().mockRejectedValue(new Error('boom')))
++    await waitFor(() => expect(screen.getByText(t('state.error'))).toBeTruthy())
++    expect(screen.getByText(t('state.retry'))).toBeTruthy()
++  })
++})

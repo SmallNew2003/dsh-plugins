@@ -1,0 +1,110 @@
+# Review package: d5c268a..HEAD
+
+## Commits
+9aab02b fix(usage-host): unique tmp suffix for atomic index saves
+
+## Files changed
+ packages/usage-host/src/usage-index.ts        |  7 ++++++-
+ packages/usage-host/tests/usage-index.spec.ts | 17 ++++++++++++++++-
+ 2 files changed, 22 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/packages/usage-host/src/usage-index.ts b/packages/usage-host/src/usage-index.ts
+index bba7c45..e4a53f7 100644
+--- a/packages/usage-host/src/usage-index.ts
++++ b/packages/usage-host/src/usage-index.ts
+@@ -45,16 +45,21 @@ export function loadIndex(path: string, normalizerVersion: string): UsageIndexFi
+   }
+   if (typeof parsed !== 'object' || parsed === null) return emptyIndex(normalizerVersion)
+   const candidate = parsed as Partial<UsageIndexFile>
+   if (candidate.version !== 1 || candidate.normalizerVersion !== normalizerVersion
+     || typeof candidate.sessions !== 'object' || candidate.sessions === null) {
+     return emptyIndex(normalizerVersion)
+   }
+   return { version: 1, normalizerVersion, sessions: candidate.sessions }
+ }
+ 
++// Monotonic per-process counter so concurrent saves never share one tmp file
++// (pid alone collides between overlapping saves, e.g. dispose() mid-scan
++// followed by summary(), or two UsageService instances on the same path).
++let tmpSequence = 0
++
+ export async function saveIndexAtomic(path: string, index: UsageIndexFile): Promise<void> {
+   await mkdir(dirname(path), { recursive: true })
+-  const tmp = path + '.tmp-' + String(process.pid)
++  const tmp = `${path}.tmp-${String(process.pid)}-${String(++tmpSequence)}`
+   await writeFile(tmp, JSON.stringify(index))
+   await rename(tmp, path)
+ }
+diff --git a/packages/usage-host/tests/usage-index.spec.ts b/packages/usage-host/tests/usage-index.spec.ts
+index dcd10fa..6864335 100644
+--- a/packages/usage-host/tests/usage-index.spec.ts
++++ b/packages/usage-host/tests/usage-index.spec.ts
+@@ -1,32 +1,38 @@
+ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++
++vi.mock('node:fs/promises', async (importOriginal) => {
++  const actual = await importOriginal<typeof import('node:fs/promises')>()
++  return { ...actual, writeFile: vi.fn(actual.writeFile) }
++})
+ import { emptyBuckets, foldSessionUsage, type RawUsageEvent } from '../src/fold-usage.ts'
+ import { entryOf, loadIndex, saveIndexAtomic, type UsageIndexFile } from '../src/usage-index.ts'
+ 
+ function message(provider: string, model: string, output: number, turn: number): RawUsageEvent {
+   return {
+     type: 'assistant/message',
+     time: new Date(2026, 8, 11).getTime(),
+     data: { turn, step: 1, usage: { inputTokens: 0, outputTokens: output }, message: { source: { provider, model } } },
+   }
+ }
+ 
+ describe('usage index', () => {
+   let dir: string
+   let path: string
+ 
+   beforeEach(async () => {
+     dir = await mkdtemp(join(tmpdir(), 'usage-index-'))
+     path = join(dir, 'nested', 'index.json')
++    vi.mocked(writeFile).mockClear()
+   })
+ 
+   afterEach(async () => {
+     await rm(dir, { recursive: true, force: true })
+   })
+ 
+   it('loads an empty index when the file does not exist', () => {
+     const index = loadIndex(path, 'v1:abc')
+     expect(index).toEqual({ version: 1, normalizerVersion: 'v1:abc', sessions: {} })
+   })
+@@ -63,18 +69,27 @@ describe('usage index', () => {
+ 
+   it('leaves no .tmp- residue after an atomic save', async () => {
+     const index: UsageIndexFile = { version: 1, normalizerVersion: 'v1:abc', sessions: {} }
+     await saveIndexAtomic(path, index)
+     await saveIndexAtomic(path, index)
+     const files = await readdir(join(dir, 'nested'))
+     expect(files).toEqual(['index.json'])
+     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(index)
+   })
+ 
++  it('writes each save to a unique tmp filename', async () => {
++    const index: UsageIndexFile = { version: 1, normalizerVersion: 'v1:abc', sessions: {} }
++    await saveIndexAtomic(path, index)
++    await saveIndexAtomic(path, index)
++    const written = vi.mocked(writeFile).mock.calls.map((call) => String(call[0]))
++    expect(written.length).toBe(2)
++    expect(new Set(written).size).toBe(written.length)
++  })
++
+   it('omits the title field when no title is given', () => {
+     const entry = entryOf(foldSessionUsage([message('p', 'm', 1, 1)]))
+     expect('title' in entry).toBe(false)
+     expect(entry.routes).toEqual(entryOf(foldSessionUsage([message('p', 'm', 1, 1)])).routes)
+     expect(entryOf(foldSessionUsage([]), undefined).daily).toEqual({})
+     expect(emptyBuckets()).toEqual({ uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })
+   })
+ })

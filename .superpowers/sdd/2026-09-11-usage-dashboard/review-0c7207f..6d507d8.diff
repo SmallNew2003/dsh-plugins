@@ -1,0 +1,541 @@
+# Review package: 0c7207f..HEAD
+
+## Commits
+6d507d8 fix(usage-host): untruncated cache, zero-row filter; polish usage client and specs
+8a700ae fix(usage-host): contain scan failures so a bad corpus or index save cannot crash the host
+
+## Files changed
+ .../client-ui-usage/src/client/UsageSection.tsx    | 13 ++----
+ .../client-ui-usage/tests/usage-section.spec.tsx   |  2 +-
+ packages/usage-host/src/aggregate.ts               |  4 ++
+ packages/usage-host/src/fold-usage.ts              |  2 +-
+ packages/usage-host/src/service.ts                 | 15 +++++--
+ packages/usage-host/tests/aggregate.spec.ts        |  9 ++++
+ packages/usage-host/tests/fold-usage.spec.ts       | 20 ++++++++-
+ packages/usage-host/tests/routes.spec.ts           | 26 ++++++++++-
+ packages/usage-host/tests/service.spec.ts          | 52 ++++++++++++++++++++++
+ 9 files changed, 127 insertions(+), 16 deletions(-)
+
+## Diff
+diff --git a/packages/client-ui-usage/src/client/UsageSection.tsx b/packages/client-ui-usage/src/client/UsageSection.tsx
+index 91fb2b8..24c17b8 100644
+--- a/packages/client-ui-usage/src/client/UsageSection.tsx
++++ b/packages/client-ui-usage/src/client/UsageSection.tsx
+@@ -2,21 +2,21 @@
+  * Usage settings section: summary cards, the provider share table with
+  * expandable model breakdown, the daily bar chart, and the top-sessions
+  * table. Data arrives through the inject face (one shared UsageController);
+  * while the host reports a scan in progress the section re-polls on a fixed
+  * cadence, and a failed read degrades to an inline error with retry.
+  *
+  * @module dsh-client-ui-usage/UsageSection
+  */
+ 
+ import { Fragment, useEffect, useState } from 'react'
+-import type { ProviderUsageRow, UsageBuckets, UsageSummaryResponse } from 'dsh-usage-host/shared'
++import { usageTotal, type ProviderUsageRow, type UsageSummaryResponse } from 'dsh-usage-host/shared'
+ import type { InjectFace, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+ import { isServiceMissing } from './controller.ts'
+ import type { UsageController } from './controller.ts'
+ import { NS } from './locales.ts'
+ import css from './UsageSection.module.css'
+ 
+ /** Injected dependencies of {@link UsageSection} (the slot inject face). */
+ export interface UsageSectionInjected {
+   /** Data carrier for the usage summary route; one instance per plugin life. */
+   readonly controller: UsageController
+@@ -45,25 +45,20 @@ function formatTokens(count: number): string {
+   if (count >= 1e6) return (count / 1e6).toFixed(1) + 'M'
+   if (count >= 1e3) return (count / 1e3).toFixed(1) + 'K'
+   return String(count)
+ }
+ 
+ /** Two-decimal USD amount. */
+ function formatUsd(amount: number): string {
+   return '$' + amount.toFixed(2)
+ }
+ 
+-/** Sum of the four disjoint buckets — the share denominator and bar unit. */
+-function bucketTotal(buckets: UsageBuckets): number {
+-  return buckets.uncachedInputTokens + buckets.outputTokens + buckets.cacheReadTokens + buckets.cacheWriteTokens
+-}
+-
+ /** One provider's priced amount: the sum of its models' estimates (undefined = none priced). */
+ function providerUsd(row: ProviderUsageRow): number | undefined {
+   let sum = 0
+   let priced = false
+   for (const model of row.models) {
+     if (model.usd !== undefined) {
+       sum += model.usd
+       priced = true
+     }
+   }
+@@ -138,21 +133,21 @@ export function UsageSection(props: UsageSectionProps) {
+       </div>
+     )
+   }
+ 
+   if (response === undefined) {
+     return <div className={css.section}><p>{t('state.scanning')}</p></div>
+   }
+ 
+   const totals = response.totals
+   const daily = response.daily.slice(-DAILY_DAYS)
+-  const dailyMax = Math.max(0, ...daily.map(day => bucketTotal(day.buckets)))
++  const dailyMax = Math.max(0, ...daily.map(day => usageTotal(day.buckets)))
+ 
+   return (
+     <div className={css.section}>
+       <h2>{t('summary.title')}</h2>
+       {response.scanning ? <p>{t('state.scanning')}</p> : null}
+       <div className={css.cards}>
+         <div className={css.card}>
+           <span className={css.cardLabel}>{t('buckets.uncachedInput')}</span>
+           <span className={css.cardValue}>{formatTokens(totals.uncachedInputTokens)}</span>
+         </div>
+@@ -163,21 +158,21 @@ export function UsageSection(props: UsageSectionProps) {
+         <div className={css.card}>
+           <span className={css.cardLabel}>{t('buckets.cacheRead')}</span>
+           <span className={css.cardValue}>{formatTokens(totals.cacheReadTokens)}</span>
+         </div>
+         <div className={css.card}>
+           <span className={css.cardLabel}>{t('buckets.cacheWrite')}</span>
+           <span className={css.cardValue}>{formatTokens(totals.cacheWriteTokens)}</span>
+         </div>
+         <div className={css.card}>
+           <span className={css.cardLabel}>{t('buckets.total')}</span>
+-          <span className={css.cardValue}>{formatTokens(bucketTotal(totals))}</span>
++          <span className={css.cardValue}>{formatTokens(usageTotal(totals))}</span>
+         </div>
+         {response.estimate !== undefined
+           ? (
+             <div className={css.card}>
+               <span className={css.cardLabel}>{t('estimate.title')}</span>
+               <span className={css.cardValue}>{formatUsd(response.estimate.totalUsd)}</span>
+               <span className={css.cardLabel}>{t('estimate.disclaimer')}</span>
+             </div>
+           )
+           : null}
+@@ -268,21 +263,21 @@ export function UsageSection(props: UsageSectionProps) {
+             </tbody>
+           </table>
+         )}
+ 
+       <h3>{t('daily.title')}</h3>
+       {daily.length === 0
+         ? <p>{t('state.empty')}</p>
+         : (
+           <div className={css.daily}>
+             {daily.map(day => {
+-              const dayTotal = bucketTotal(day.buckets)
++              const dayTotal = usageTotal(day.buckets)
+               const height = dailyMax > 0 ? Math.round((dayTotal / dailyMax) * 100) : 0
+               return (
+                 <div
+                   key={day.date}
+                   className={css.column}
+                   style={{ height: height + '%' }}
+                   title={day.date + ' · ' + formatTokens(dayTotal)}
+                 />
+               )
+             })}
+diff --git a/packages/client-ui-usage/tests/usage-section.spec.tsx b/packages/client-ui-usage/tests/usage-section.spec.tsx
+index 74d1cd0..a6a19b0 100644
+--- a/packages/client-ui-usage/tests/usage-section.spec.tsx
++++ b/packages/client-ui-usage/tests/usage-section.spec.tsx
+@@ -45,21 +45,21 @@ function mount(response: UsageSummaryResponse, fetchSummary = vi.fn().mockResolv
+ describe('UsageSection', () => {
+   afterEach(() => { cleanup() })
+ 
+   it('renders provider rows with model detail and estimate', async () => {
+     mount(SUMMARY)
+     await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy())
+     expect(screen.getByText('DeepSeek V4 Flash')).toBeTruthy()
+     expect(screen.getByText('大项目')).toBeTruthy()
+   })
+ 
+-  it('keeps polling while scanning and stops when settled', async () => {
++  it('keeps polling while scanning; a settled response keeps polling at the 60s cadence', async () => {
+     vi.useFakeTimers()
+     const fetchSummary = vi.fn()
+       .mockResolvedValueOnce({ ...SUMMARY, scanning: true })
+       .mockResolvedValueOnce(SUMMARY)
+     mount(SUMMARY, fetchSummary)
+     await vi.advanceTimersByTimeAsync(5_000)
+     await vi.advanceTimersByTimeAsync(5_000)
+     vi.useRealTimers()
+     expect(fetchSummary).toHaveBeenCalledTimes(2)
+   })
+diff --git a/packages/usage-host/src/aggregate.ts b/packages/usage-host/src/aggregate.ts
+index 51e4886..1892a2c 100644
+--- a/packages/usage-host/src/aggregate.ts
++++ b/packages/usage-host/src/aggregate.ts
+@@ -57,20 +57,23 @@ export function aggregateSessions(records: readonly AggregateInput[], normalizer
+   }
+ 
+   interface ModelAcc { displayName: string; recognized: boolean; aliases: Set<string>; buckets: UsageBuckets }
+   interface ProviderAcc { displayName: string; buckets: UsageBuckets; models: Map<string, ModelAcc> }
+   const providerAcc = new Map<string, ProviderAcc>()
+   const unpriced = new Set<string>()
+   let totalUsd = 0
+   let anyPriced = false
+ 
+   for (const [key, buckets] of routeBuckets) {
++    // A route fully replaced back to zero carries no usage — drop it instead
++    // of rendering an empty provider/model row.
++    if (usageTotal(buckets) === 0) continue
+     const separator = key.indexOf('\u0000')
+     const normalized = normalizer.normalize(key.slice(0, separator), key.slice(separator + 1))
+     const provider = providerAcc.get(normalized.providerKey) ?? {
+       displayName: normalized.providerDisplayName,
+       buckets: emptyBuckets(),
+       models: new Map<string, ModelAcc>(),
+     }
+     const model = provider.models.get(normalized.modelKey) ?? {
+       displayName: normalized.displayName,
+       recognized: normalized.recognized,
+@@ -110,20 +113,21 @@ export function aggregateSessions(records: readonly AggregateInput[], normalizer
+       provider: providerKey,
+       displayName: row.displayName,
+       buckets: row.buckets,
+       share: grandTotal === 0 ? 0 : usageTotal(row.buckets) / grandTotal,
+       models,
+     })
+   }
+   providers.sort((left, right) => usageTotal(right.buckets) - usageTotal(left.buckets))
+ 
+   const dailyRows: DailyUsageRow[] = [...daily.entries()]
++    .filter(([, buckets]) => usageTotal(buckets) !== 0)
+     .map(([date, buckets]) => ({ date, buckets }))
+     .sort((left, right) => left.date.localeCompare(right.date))
+   sessionRows.sort((left, right) => usageTotal(right.buckets) - usageTotal(left.buckets))
+ 
+   return {
+     sessionCount: records.length,
+     totals,
+     providers,
+     daily: dailyRows,
+     topSessions: sessionRows.slice(0, limit),
+diff --git a/packages/usage-host/src/fold-usage.ts b/packages/usage-host/src/fold-usage.ts
+index e8a3ca9..9f4d21d 100644
+--- a/packages/usage-host/src/fold-usage.ts
++++ b/packages/usage-host/src/fold-usage.ts
+@@ -148,11 +148,11 @@ export function foldSessionUsage(events: readonly RawUsageEvent[]): SessionUsage
+       addInto(routes, previous.routeKey, previous.buckets, -1)
+       addInto(daily, previous.day, previous.buckets, -1)
+     }
+     totals = replaceTotals(totals, previous?.buckets, buckets)
+     addInto(routes, key, buckets, 1)
+     addInto(daily, day, buckets, 1)
+     last = { turn, step, routeKey: key, day, buckets }
+   }
+ 
+   return { eventCount: events.length, totals, routes, daily }
+-}
+\ No newline at end of file
++}
+diff --git a/packages/usage-host/src/service.ts b/packages/usage-host/src/service.ts
+index 4daf414..fb47eaa 100644
+--- a/packages/usage-host/src/service.ts
++++ b/packages/usage-host/src/service.ts
+@@ -48,32 +48,32 @@ export class UsageService {
+       ?? join(homedir(), '.dsh', 'storages', 'usage-host', 'models.json')
+     this.refreshMs = options.refreshMs ?? 30_000
+     this.indexPath = options.indexPath ?? join(homedir(), '.dsh', 'storages', 'usage-host', 'index.json')
+   }
+ 
+   dispose(): void {
+     this.scanning = false
+   }
+ 
+   summary(limit = 20): UsageSummaryResponse {
+-    if (!this.scanning && Date.now() - this.lastScanAt >= this.refreshMs) void this.scan(limit)
++    if (!this.scanning && Date.now() - this.lastScanAt >= this.refreshMs) void this.scan()
+     if (this.cached === undefined) {
+       return {
+         generatedAt: Date.now(), scanning: true, sessionCount: 0, skippedSessions: 0,
+         totals: EMPTY_TOTALS, providers: [], daily: [], topSessions: [],
+         unpricedModels: [], estimate: undefined,
+       }
+     }
+     return { ...this.cached, topSessions: this.cached.topSessions.slice(0, limit) }
+   }
+ 
+-  private async scan(limit: number): Promise<void> {
++  private async scan(): Promise<void> {
+     if (this.scanning) return
+     this.scanning = true
+     try {
+       const normalizer = buildNormalizer(loadModelRegistry(this.registryOverridesPath))
+       const index = loadIndex(this.indexPath, normalizer.version)
+       const records = await this.sessionQuery.listSessions()
+       const sessions: Record<string, SessionIndexEntry> = {}
+       let skipped = 0
+ 
+       for (const record of records) {
+@@ -99,27 +99,36 @@ export class UsageService {
+           createdAt: header?.createdAt ?? 0,
+           ...(header?.cwd === undefined ? {} : { cwd: header.cwd }),
+           fold: {
+             eventCount: entry.eventCount,
+             totals: sumEntries([entry]),
+             routes: new Map(Object.entries(entry.routes)),
+             daily: new Map(Object.entries(entry.daily)),
+           },
+         }
+       })
+-      const views = aggregateSessions(inputs, normalizer, limit)
++      // The cache holds the full aggregation (no limit here): summary() slices
++      // topSessions per request, so a later larger ?limit is still servable.
++      const views = aggregateSessions(inputs, normalizer, Number.MAX_SAFE_INTEGER)
+       this.cached = {
+         generatedAt: Date.now(),
+         scanning: false,
+         skippedSessions: skipped,
+         ...views,
+       }
++    } catch (error) {
++      // Containment: summary() fires scan() fire-and-forget, so a rejection
++      // here would be unhandled and abort the host process. Keep the previous
++      // cache untouched (a partial result must never replace a good one) and
++      // log once; lastScanAt still advances below so the refreshMs throttle
++      // holds and a healthy corpus is picked up on the next window.
++      console.warn('[dsh-usage-host] usage scan failed; keeping the previous summary', error)
+     } finally {
+       this.scanning = false
+       this.lastScanAt = Date.now()
+     }
+   }
+ 
+   /** 全量读取并折叠一个会话(新会话,或回退路径)。 */
+   private async refresh(id: string, previous: SessionIndexEntry | undefined): Promise<SessionIndexEntry> {
+     const loaded = await this.sessionQuery.readSession(id)
+     const fold = foldSessionUsage(loaded.events)
+diff --git a/packages/usage-host/tests/aggregate.spec.ts b/packages/usage-host/tests/aggregate.spec.ts
+index 7da2351..7efa927 100644
+--- a/packages/usage-host/tests/aggregate.spec.ts
++++ b/packages/usage-host/tests/aggregate.spec.ts
+@@ -74,17 +74,26 @@ describe('aggregateSessions', () => {
+   })
+ 
+   it('merges daily rows ascending across sessions', () => {
+     const result = aggregateSessions([
+       record('a', [message('deepseek', 'deepseek-v4-flash', 2, 11), message('deepseek', 'deepseek-v4-flash', 1, 10, 2)]),
+     ], normalizer, 20)
+     expect(result.daily.map(row => row.date)).toEqual(['2026-09-10', '2026-09-11'])
+     expect(result.daily[1]!.buckets.outputTokens).toBe(2)
+   })
+ 
++  it('drops routes and daily columns that were fully replaced back to zero', () => {
++    const result = aggregateSessions([
++      record('a', [message('deepseek', 'deepseek-v4-flash', 10), message('deepseek', 'deepseek-v4-flash', 0)]),
++    ], normalizer, 20)
++    expect(result.totals).toEqual(emptyBuckets())
++    expect(result.providers).toEqual([])
++    expect(result.daily).toEqual([])
++  })
++
+   it('handles an empty corpus', () => {
+     const result = aggregateSessions([], normalizer, 20)
+     expect(result.providers).toEqual([])
+     expect(result.totals).toEqual(emptyBuckets())
+     expect(result.estimate).toBeUndefined()
+   })
+ })
+diff --git a/packages/usage-host/tests/fold-usage.spec.ts b/packages/usage-host/tests/fold-usage.spec.ts
+index b5a06d7..de079b1 100644
+--- a/packages/usage-host/tests/fold-usage.spec.ts
++++ b/packages/usage-host/tests/fold-usage.spec.ts
+@@ -1,12 +1,12 @@
+ import { describe, expect, it } from 'vitest'
+-import { foldSessionUsage, routeKey, type RawUsageEvent } from '../src/fold-usage.ts'
++import { emptyBuckets, foldSessionUsage, routeKey, type RawUsageEvent } from '../src/fold-usage.ts'
+ 
+ const SOURCE = { message: { source: { provider: 'deepseek', model: 'deepseek-v4-flash' } } }
+ 
+ function message(turn: number, step: number, usage: Record<string, number>, extra: Partial<RawUsageEvent['data']> = {}): RawUsageEvent {
+   return { type: 'assistant/message', time: Date.UTC(2026, 8, 11, 2), data: { turn, step, usage, ...SOURCE, ...extra } }
+ }
+ 
+ describe('foldSessionUsage', () => {
+   it('accumulates usage with provider attribution', () => {
+     const fold = foldSessionUsage([
+@@ -40,20 +40,38 @@ describe('foldSessionUsage', () => {
+     expect(fold.routes.get(routeKey('anthropic', 'claude-x'))?.outputTokens).toBe(12)
+   })
+ 
+   it('falls back to the last stream usage record and attributes unattributed attempts', () => {
+     const stream = [{ type: 'chunk', chunk: { type: 'text-delta', text: 'x' } }, { type: 'chunk', chunk: { type: 'usage', usage: { inputTokens: 30, outputTokens: 5 } } }]
+     const fold = foldSessionUsage([{ type: 'assistant/attempt', time: 0, data: { turn: 2, step: 1, stream } }])
+     expect(fold.routes.get(routeKey('unattributed', 'unattributed')))
+       .toEqual({ uncachedInputTokens: 30, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 })
+   })
+ 
++  it('does not count events with no usage and no stream', () => {
++    const fold = foldSessionUsage([
++      { type: 'user/message', time: 0, data: {} },
++      { type: 'assistant/message', time: 0, data: { turn: 1, step: 1, ...SOURCE } },
++    ])
++    expect(fold.totals).toEqual(emptyBuckets())
++    expect(fold.routes.size).toBe(0)
++    expect(fold.daily.size).toBe(0)
++  })
++
++  it('prefers the usage field over the stream when both are present', () => {
++    const stream = [{ type: 'chunk', chunk: { type: 'usage', usage: { inputTokens: 999, outputTokens: 999 } } }]
++    const fold = foldSessionUsage([
++      { type: 'assistant/message', time: 0, data: { turn: 1, step: 1, usage: { inputTokens: 10, outputTokens: 2 }, stream, ...SOURCE } },
++    ])
++    expect(fold.totals).toEqual({ uncachedInputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 })
++  })
++
+   it('ignores events with invalid usage buckets', () => {
+     const fold = foldSessionUsage([message(1, 1, { inputTokens: -5, outputTokens: 1 }), message(1, 2, { inputTokens: 10, outputTokens: 2 })])
+     expect(fold.totals.uncachedInputTokens).toBe(10)
+   })
+ 
+   it('buckets by local-calendar day and subtracts replacements from the old day', () => {
+     const morning = { type: 'assistant/message', time: new Date(2026, 8, 11, 1).getTime(), data: { turn: 1, step: 1, usage: { inputTokens: 100, outputTokens: 10 }, ...SOURCE } }
+     const evening = { type: 'assistant/message', time: new Date(2026, 8, 11, 23).getTime(), data: { turn: 1, step: 1, usage: { inputTokens: 200, outputTokens: 20 }, ...SOURCE } }
+     const fold = foldSessionUsage([morning, evening])
+     expect(fold.daily.size).toBe(1)
+diff --git a/packages/usage-host/tests/routes.spec.ts b/packages/usage-host/tests/routes.spec.ts
+index 475a661..36d9ed6 100644
+--- a/packages/usage-host/tests/routes.spec.ts
++++ b/packages/usage-host/tests/routes.spec.ts
+@@ -150,20 +150,44 @@ describe('summary route', () => {
+     expect(done.reply.status()).toBe(200)
+     const body = done.reply.body() as UsageSummaryResponse
+     expect(body.scanning).toBe(false)
+     expect(body.sessionCount).toBe(2)
+     expect(body.totals.outputTokens).toBe(40)
+     expect(body.providers).toHaveLength(1)
+     expect(body.providers[0]).toMatchObject({ provider: 'deepseek', models: [{ model: 'm1', buckets: { outputTokens: 40 } }] })
+     expect(body.topSessions[0]).toMatchObject({ sessionId: 'b', title: 't-b' })
+   })
+ 
++  it('serves a larger limit from the untruncated cache inside the refresh window', async () => {
++    const sessions = Array.from({ length: 25 }, (_, index) => session('s' + String(index).padStart(2, '0'), 10 + index))
++    const handler = compose(sessions)
++    const small = pair({ method: 'GET', url: USAGE_SUMMARY_ROUTE + '?limit=3' })
++    await handler(small.req, small.res)
++    expect((small.reply.body() as UsageSummaryResponse).scanning).toBe(true)
++
++    await vi.waitFor(async () => {
++      const poll = pair({ method: 'GET', url: USAGE_SUMMARY_ROUTE })
++      await handler(poll.req, poll.res)
++      expect((poll.reply.body() as UsageSummaryResponse).scanning).toBe(false)
++    })
++
++    const narrow = pair({ method: 'GET', url: USAGE_SUMMARY_ROUTE + '?limit=3' })
++    await handler(narrow.req, narrow.res)
++    expect((narrow.reply.body() as UsageSummaryResponse).topSessions).toHaveLength(3)
++
++    // Same refresh window, larger limit: the cache must hold the full
++    // aggregation and let summary() slice, so more rows are now reachable.
++    const larger = pair({ method: 'GET', url: USAGE_SUMMARY_ROUTE + '?limit=200' })
++    await handler(larger.req, larger.res)
++    expect((larger.reply.body() as UsageSummaryResponse).topSessions).toHaveLength(25)
++  })
++
+   it('rejects POST with 405 and an allow: GET header', async () => {
+     const handler = compose([session('a', 10)])
+     const call = pair({ method: 'POST', url: USAGE_SUMMARY_ROUTE })
+     await handler(call.req, call.res)
+     expect(call.reply.status()).toBe(405)
+     expect(call.reply.header('allow')).toBe('GET')
+     expect(call.reply.body()).toBeUndefined()
+   })
+ 
+   it('propagates the connection rejection and stops there', async () => {
+@@ -196,11 +220,11 @@ describe('summary route', () => {
+     expect((overflow.reply.body() as UsageSummaryResponse).topSessions).toHaveLength(20)
+ 
+     const zero = pair({ method: 'GET', url: USAGE_SUMMARY_ROUTE + '?limit=0' })
+     await handler(zero.req, zero.res)
+     expect((zero.reply.body() as UsageSummaryResponse).topSessions).toHaveLength(20)
+ 
+     const inRange = pair({ method: 'GET', url: USAGE_SUMMARY_ROUTE + '?limit=3' })
+     await handler(inRange.req, inRange.res)
+     expect((inRange.reply.body() as UsageSummaryResponse).topSessions).toHaveLength(3)
+   })
+-})
+\ No newline at end of file
++})
+diff --git a/packages/usage-host/tests/service.spec.ts b/packages/usage-host/tests/service.spec.ts
+index 2b258b4..2d46c49 100644
+--- a/packages/usage-host/tests/service.spec.ts
++++ b/packages/usage-host/tests/service.spec.ts
+@@ -154,20 +154,72 @@ describe('UsageService', () => {
+     b.events = [...b.events, message('deepseek', 'm1', 5, 2)]
+     await vi.waitFor(() => {
+       service.summary()
+       expect(calls.readSession['b']).toBeGreaterThanOrEqual(2)
+     })
+     expect(calls.readSession['a']).toBe(1)
+     await quiesce()
+     expect(service.summary().totals.outputTokens).toBe(45)
+   })
+ 
++  it('contains a listSessions failure: scan resolves, zero shell kept, throttle holds', async () => {
++    // Observable hook: the background scan is awaited directly — it must
++    // settle resolved, never reject out of the service. The process-level
++    // 'unhandledRejection' listener double-checks the fire-and-forget path.
++    const unhandled: unknown[] = []
++    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
++    process.on('unhandledRejection', onUnhandled)
++    try {
++      const { query, calls } = makeQuery([session('a', 10)], false)
++      query.listSessions = async () => {
++        calls.listSessions += 1
++        throw new Error('corpus down')
++      }
++      const service = new UsageService(query, { indexPath, refreshMs: 60_000 })
++
++      await expect((service as unknown as { scan(limit: number): Promise<void> }).scan(20)).resolves.toBeUndefined()
++      expect(unhandled).toEqual([])
++      expect((service as unknown as { scanning: boolean }).scanning).toBe(false)
++
++      // The zero shell is untouched and lastScanAt now throttles the next scan.
++      const shell = service.summary()
++      expect(calls.listSessions).toBe(1)
++      expect(shell.sessionCount).toBe(0)
++      expect(shell.totals.outputTokens).toBe(0)
++      expect(shell.providers).toEqual([])
++    } finally {
++      process.off('unhandledRejection', onUnhandled)
++    }
++  })
++
++  it('contains a saveIndexAtomic failure: scan resolves and the cache stays empty', async () => {
++    const unhandled: unknown[] = []
++    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
++    process.on('unhandledRejection', onUnhandled)
++    try {
++      saveSpy.mockRejectedValueOnce(new Error('disk full'))
++      const { query } = makeQuery([session('a', 10)], false)
++      const service = new UsageService(query, { indexPath, refreshMs: 60_000 })
++
++      await expect((service as unknown as { scan(limit: number): Promise<void> }).scan(20)).resolves.toBeUndefined()
++      expect(unhandled).toEqual([])
++      expect((service as unknown as { scanning: boolean }).scanning).toBe(false)
++
++      // First-scan failure: still the zero shell, never a partial summary.
++      const shell = service.summary()
++      expect(shell.sessionCount).toBe(0)
++      expect(shell.totals.outputTokens).toBe(0)
++    } finally {
++      process.off('unhandledRejection', onUnhandled)
++    }
++  })
++
+   it('falls back to a full re-read for unchanged sessions when no probe exists', async () => {
+     const a = session('a', 10)
+     const b = session('b', 30)
+     const { query, calls } = makeQuery([a, b], false)
+     const service = new UsageService(query, { indexPath, refreshMs: 0 })
+     await vi.waitFor(() => { expect(service.summary().scanning).toBe(false) })
+     await quiesce()
+ 
+     b.events = [...b.events, message('deepseek', 'm1', 5, 2)]
+     await vi.waitFor(() => {

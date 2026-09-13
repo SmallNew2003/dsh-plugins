@@ -1,0 +1,493 @@
+# Review package: 153cf5650a738610eb035a1661142bb92c21f992..HEAD
+
+## Commits
+7b2564e feat(usage-host): route-attributed session usage fold
+a983750 feat(usage-host): package scaffold and wire types
+
+## Files changed
+ packages/usage-host/package.json             |  32 ++++++
+ packages/usage-host/src/fold-usage.ts        | 158 +++++++++++++++++++++++++++
+ packages/usage-host/src/index.ts             |  14 +++
+ packages/usage-host/src/shared.ts            |  81 ++++++++++++++
+ packages/usage-host/tests/fold-usage.spec.ts |  67 ++++++++++++
+ packages/usage-host/tsconfig.json            |   9 ++
+ packages/usage-host/tsdown.config.ts         |  19 ++++
+ pnpm-lock.yaml                               |  27 +++++
+ 8 files changed, 407 insertions(+)
+
+## Diff
+diff --git a/packages/usage-host/package.json b/packages/usage-host/package.json
+new file mode 100644
+index 0000000..cea47b9
+--- /dev/null
++++ b/packages/usage-host/package.json
+@@ -0,0 +1,32 @@
++{
++  "name": "dsh-usage-host",
++  "description": "Host-side usage service and webServer route: cross-session provider token aggregation behind the browser trust fence",
++  "version": "0.1.0",
++  "license": "MIT",
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" },
++    "./shared": { "types": "./lib/types/shared.d.ts", "default": "./lib/types/shared.js" },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json"
++  },
++  "scripts": { "build": "tsc -p tsconfig.json && tsdown", "test": "vitest run" },
++  "peerDependencies": {
++    "@deepseek-ai/cordis": ">=4",
++    "@deepseek-ai/dsh-host-webserver": ">=0.1.0",
++    "@deepseek-ai/dsh-llm": ">=0.1.0",
++    "@deepseek-ai/schemastery": ">=0.1.0"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "link:../../../deepseek-harness/vendor/cordis",
++    "@deepseek-ai/dsh-host-webserver": "link:../../../deepseek-harness/packages/host/webserver",
++    "@deepseek-ai/dsh-llm": "link:../../../deepseek-harness/packages/llm/llm",
++    "@deepseek-ai/schemastery": "link:../../../deepseek-harness/vendor/schemastery",
++    "@types/node": "^22.0.0",
++    "typescript": "^5.7.0",
++    "tsdown": "^0.12.0",
++    "vitest": "^3.0.0"
++  }
++}
+diff --git a/packages/usage-host/src/fold-usage.ts b/packages/usage-host/src/fold-usage.ts
+new file mode 100644
+index 0000000..e8a3ca9
+--- /dev/null
++++ b/packages/usage-host/src/fold-usage.ts
+@@ -0,0 +1,158 @@
++/**
++ * Route-attributed usage fold over one session's raw log events.
++ *
++ * Mirrors the upstream token-meter tokenUsage projection fold exactly, with
++ * one extension: the last-wins slot carries a routeKey so replacement
++ * subtracts from the route that produced the superseded sample.
++ *
++ * The stream scan below mirrors upstream dsh-llm's lastAssistantStreamChunk
++ * (record.type === 'chunk', backwards, first chunk-type hit) because the
++ * pinned @deepseek-ai/dsh-llm checkout has not built its /assistant-stream
++ * subpath yet; restore the upstream import once lib/types/assistant-stream.js
++ * ships.
++ *
++ * @module dsh-usage-host/fold-usage
++ */
++
++import type { UsageBuckets } from './shared.ts'
++
++export interface RawUsageEventData {
++  readonly turn?: number
++  readonly step?: number
++  readonly usage?: unknown
++  readonly stream?: readonly unknown[]
++  readonly message?: { readonly source?: { readonly provider?: string; readonly model?: string } }
++}
++
++export interface RawUsageEvent {
++  readonly type: string
++  readonly time: number
++  readonly data: RawUsageEventData
++}
++
++export interface SessionUsageFold {
++  readonly eventCount: number
++  readonly totals: UsageBuckets
++  readonly routes: Map<string, UsageBuckets>
++  readonly daily: Map<string, UsageBuckets>
++}
++
++const UNATTRIBUTED = routeKey('unattributed', 'unattributed')
++
++export function routeKey(provider: string, model: string): string {
++  return provider + '\u0000' + model
++}
++
++export function emptyBuckets(): UsageBuckets {
++  return { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
++}
++
++function isCount(value: unknown): value is number {
++  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
++}
++
++/** Upstream lastAssistantStreamChunk scan: backwards over compact records. */
++function lastUsageChunk(stream: readonly unknown[]): { readonly usage: unknown } | undefined {
++  for (let index = stream.length - 1; index >= 0; index -= 1) {
++    const record = stream[index] as { type?: unknown; chunk?: { type?: unknown; usage?: unknown } }
++    if (record.type === 'chunk' && record.chunk?.type === 'usage') return record.chunk as { readonly usage: unknown }
++  }
++  return undefined
++}
++
++function bucketsOf(usage: unknown): UsageBuckets | undefined {
++  if (typeof usage !== 'object' || usage === null) return undefined
++  const record = usage as Record<string, unknown>
++  const input = record['inputTokens']
++  const output = record['outputTokens']
++  if (!isCount(input) || !isCount(output)) return undefined
++  const cacheRead = record['cacheReadTokens'] ?? 0
++  const cacheWrite = record['cacheWriteTokens'] ?? 0
++  if (!isCount(cacheRead) || !isCount(cacheWrite)) return undefined
++  return { uncachedInputTokens: input, outputTokens: output, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite }
++}
++
++function sampleOf(event: RawUsageEvent): UsageBuckets | undefined {
++  if (event.type !== 'assistant/message' && event.type !== 'assistant/attempt') return undefined
++  if (event.type === 'assistant/message' && event.data.usage !== undefined) return bucketsOf(event.data.usage)
++  const stream = event.data.stream
++  if (stream === undefined) return undefined
++  return bucketsOf(lastUsageChunk(stream)?.usage)
++}
++
++function bucketsEqual(left: UsageBuckets, right: UsageBuckets): boolean {
++  return left.uncachedInputTokens === right.uncachedInputTokens
++    && left.outputTokens === right.outputTokens
++    && left.cacheReadTokens === right.cacheReadTokens
++    && left.cacheWriteTokens === right.cacheWriteTokens
++}
++
++function replaceTotals(totals: UsageBuckets, previous: UsageBuckets | undefined, next: UsageBuckets): UsageBuckets {
++  return {
++    uncachedInputTokens: totals.uncachedInputTokens - (previous?.uncachedInputTokens ?? 0) + next.uncachedInputTokens,
++    outputTokens: totals.outputTokens - (previous?.outputTokens ?? 0) + next.outputTokens,
++    cacheReadTokens: totals.cacheReadTokens - (previous?.cacheReadTokens ?? 0) + next.cacheReadTokens,
++    cacheWriteTokens: totals.cacheWriteTokens - (previous?.cacheWriteTokens ?? 0) + next.cacheWriteTokens,
++  }
++}
++
++function addInto(map: Map<string, UsageBuckets>, key: string, buckets: UsageBuckets, sign: 1 | -1): void {
++  const current = map.get(key) ?? emptyBuckets()
++  map.set(key, {
++    uncachedInputTokens: current.uncachedInputTokens + sign * buckets.uncachedInputTokens,
++    outputTokens: current.outputTokens + sign * buckets.outputTokens,
++    cacheReadTokens: current.cacheReadTokens + sign * buckets.cacheReadTokens,
++    cacheWriteTokens: current.cacheWriteTokens + sign * buckets.cacheWriteTokens,
++  })
++}
++
++/** Local-calendar YYYY-MM-DD of one epoch-ms timestamp. */
++export function dayKeyOf(time: number): string {
++  const date = new Date(time)
++  const month = String(date.getMonth() + 1).padStart(2, '0')
++  const day = String(date.getDate()).padStart(2, '0')
++  return String(date.getFullYear()) + '-' + month + '-' + day
++}
++
++function sourceOf(event: RawUsageEvent): string {
++  const provider = event.data.message?.source?.provider
++  const model = event.data.message?.source?.model
++  return provider !== undefined && provider.length > 0 && model !== undefined && model.length > 0
++    ? routeKey(provider, model)
++    : UNATTRIBUTED
++}
++
++export function foldSessionUsage(events: readonly RawUsageEvent[]): SessionUsageFold {
++  let totals = emptyBuckets()
++  const routes = new Map<string, UsageBuckets>()
++  const daily = new Map<string, UsageBuckets>()
++  let last: { turn: number; step: number; routeKey: string; day: string; buckets: UsageBuckets } | null = null
++
++  for (const event of events) {
++    if (event.type === 'llm/retry-started') {
++      if (last !== null && last.turn === event.data.turn && last.step === event.data.step) last = null
++      continue
++    }
++    const buckets = sampleOf(event)
++    if (buckets === undefined) continue
++    const turn = event.data.turn
++    const step = event.data.step
++    if (!isCount(turn) || !isCount(step)) continue
++
++    const key = sourceOf(event)
++    const day = dayKeyOf(event.time)
++    const previous = last !== null && last.turn === turn && last.step === step ? last : undefined
++    if (previous !== undefined && bucketsEqual(previous.buckets, buckets)) continue
++
++    if (previous !== undefined) {
++      addInto(routes, previous.routeKey, previous.buckets, -1)
++      addInto(daily, previous.day, previous.buckets, -1)
++    }
++    totals = replaceTotals(totals, previous?.buckets, buckets)
++    addInto(routes, key, buckets, 1)
++    addInto(daily, day, buckets, 1)
++    last = { turn, step, routeKey: key, day, buckets }
++  }
++
++  return { eventCount: events.length, totals, routes, daily }
++}
+\ No newline at end of file
+diff --git a/packages/usage-host/src/index.ts b/packages/usage-host/src/index.ts
+new file mode 100644
+index 0000000..6863cc2
+--- /dev/null
++++ b/packages/usage-host/src/index.ts
+@@ -0,0 +1,14 @@
++/**
++ * Host half of the usage dashboard plugin: the aggregation service plus one
++ * webServer summary route behind the connection browser trust fence.
++ * @module dsh-usage-host
++ */
++
++import type { Context } from '@deepseek-ai/cordis'
++import type {} from '@deepseek-ai/dsh-host-webserver'
++
++export const name = 'dsh-usage-host'
++
++export function apply(ctx: Context): void {
++  void ctx
++}
+diff --git a/packages/usage-host/src/shared.ts b/packages/usage-host/src/shared.ts
+new file mode 100644
+index 0000000..11d1ad5
+--- /dev/null
++++ b/packages/usage-host/src/shared.ts
+@@ -0,0 +1,81 @@
++/**
++ * Wire vocabulary shared with the browser package: the summary route path and
++ * its response payload types. Browser-safe by construction (types plus one
++ * pure helper).
++ *
++ * @module dsh-usage-host/shared
++ */
++
++/** The one usage route: GET-only, behind the connection browser trust fence. */
++export const USAGE_SUMMARY_ROUTE = '/dsh-usage/summary'
++
++/** The four disjoint provider-reported buckets. Reasoning is inside output. */
++export interface UsageBuckets {
++  readonly uncachedInputTokens: number
++  readonly outputTokens: number
++  readonly cacheReadTokens: number
++  readonly cacheWriteTokens: number
++}
++
++/** Sum of the four buckets — the share denominator and sort key. */
++export function usageTotal(buckets: UsageBuckets): number {
++  return buckets.uncachedInputTokens + buckets.outputTokens + buckets.cacheReadTokens + buckets.cacheWriteTokens
++}
++
++/** One canonical model's usage under one provider. */
++export interface ModelUsageRow {
++  readonly model: string
++  readonly displayName: string
++  /** false = 未识别模型:aliases 即原始名,不计价。 */
++  readonly recognized: boolean
++  /** 归并到该 canonical 模型出现过的原始 model 名列表。 */
++  readonly aliases: readonly string[]
++  readonly buckets: UsageBuckets
++  /** 估算金额(USD);undefined = 未配置单价。 */
++  readonly usd: number | undefined
++}
++
++/** One provider row with its model breakdown. */
++export interface ProviderUsageRow {
++  readonly provider: string
++  readonly displayName: string
++  readonly buckets: UsageBuckets
++  /** 0..1,分母为全部四桶总和。 */
++  readonly share: number
++  readonly models: readonly ModelUsageRow[]
++}
++
++/** One local-calendar day of usage. */
++export interface DailyUsageRow {
++  /** YYYY-MM-DD in the host's local timezone. */
++  readonly date: string
++  readonly buckets: UsageBuckets
++}
++
++/** One session's usage for the Top list. */
++export interface SessionUsageRow {
++  readonly sessionId: string
++  readonly title: string | undefined
++  readonly cwd: string | undefined
++  readonly createdAt: number
++  readonly buckets: UsageBuckets
++}
++
++/** The GET USAGE_SUMMARY_ROUTE payload. */
++export interface UsageSummaryResponse {
++  readonly generatedAt: number
++  /** true = 后台首次/全量扫描进行中,前端应轮询。 */
++  readonly scanning: boolean
++  /** 已纳入统计的会话数(不含 skipped)。 */
++  readonly sessionCount: number
++  /** 读取/校验失败被跳过的会话数。 */
++  readonly skippedSessions: number
++  readonly totals: UsageBuckets
++  readonly providers: readonly ProviderUsageRow[]
++  readonly daily: readonly DailyUsageRow[]
++  readonly topSessions: readonly SessionUsageRow[]
++  /** 未配置单价、未计入金额的 canonical 模型 id。 */
++  readonly unpricedModels: readonly string[]
++  /** 全部已计价模型金额合计(USD 估算);undefined = 一个可计价模型都没有。 */
++  readonly estimate: { readonly totalUsd: number } | undefined
++}
+diff --git a/packages/usage-host/tests/fold-usage.spec.ts b/packages/usage-host/tests/fold-usage.spec.ts
+new file mode 100644
+index 0000000..b5a06d7
+--- /dev/null
++++ b/packages/usage-host/tests/fold-usage.spec.ts
+@@ -0,0 +1,67 @@
++import { describe, expect, it } from 'vitest'
++import { foldSessionUsage, routeKey, type RawUsageEvent } from '../src/fold-usage.ts'
++
++const SOURCE = { message: { source: { provider: 'deepseek', model: 'deepseek-v4-flash' } } }
++
++function message(turn: number, step: number, usage: Record<string, number>, extra: Partial<RawUsageEvent['data']> = {}): RawUsageEvent {
++  return { type: 'assistant/message', time: Date.UTC(2026, 8, 11, 2), data: { turn, step, usage, ...SOURCE, ...extra } }
++}
++
++describe('foldSessionUsage', () => {
++  it('accumulates usage with provider attribution', () => {
++    const fold = foldSessionUsage([
++      message(1, 1, { inputTokens: 1000, outputTokens: 100, cacheReadTokens: 5000 }),
++      message(1, 2, { inputTokens: 2000, outputTokens: 300 }),
++    ])
++    expect(fold.eventCount).toBe(2)
++    expect(fold.totals).toEqual({ uncachedInputTokens: 3000, outputTokens: 400, cacheReadTokens: 5000, cacheWriteTokens: 0 })
++    expect(fold.routes.get(routeKey('deepseek', 'deepseek-v4-flash')))
++      .toEqual({ uncachedInputTokens: 3000, outputTokens: 400, cacheReadTokens: 5000, cacheWriteTokens: 0 })
++  })
++
++  it('is idempotent for the same repeated (turn, step) sample', () => {
++    const fold = foldSessionUsage([message(1, 1, { inputTokens: 100, outputTokens: 10 }), message(1, 1, { inputTokens: 100, outputTokens: 10 })])
++    expect(fold.totals.outputTokens).toBe(10)
++  })
++
++  it('replaces the sample when the same (turn, step) reports new buckets', () => {
++    const fold = foldSessionUsage([message(1, 1, { inputTokens: 100, outputTokens: 10 }), message(1, 1, { inputTokens: 150, outputTokens: 20 })])
++    expect(fold.totals).toEqual({ uncachedInputTokens: 150, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 })
++  })
++
++  it('re-adds after llm/retry-started closes the slot, including across routes', () => {
++    const fold = foldSessionUsage([
++      message(1, 1, { inputTokens: 100, outputTokens: 10 }),
++      { type: 'llm/retry-started', time: 0, data: { turn: 1, step: 1 } },
++      message(1, 1, { inputTokens: 120, outputTokens: 12 }, { message: { source: { provider: 'anthropic', model: 'claude-x' } } }),
++    ])
++    expect(fold.totals.outputTokens).toBe(22)
++    expect(fold.routes.get(routeKey('deepseek', 'deepseek-v4-flash'))?.outputTokens).toBe(10)
++    expect(fold.routes.get(routeKey('anthropic', 'claude-x'))?.outputTokens).toBe(12)
++  })
++
++  it('falls back to the last stream usage record and attributes unattributed attempts', () => {
++    const stream = [{ type: 'chunk', chunk: { type: 'text-delta', text: 'x' } }, { type: 'chunk', chunk: { type: 'usage', usage: { inputTokens: 30, outputTokens: 5 } } }]
++    const fold = foldSessionUsage([{ type: 'assistant/attempt', time: 0, data: { turn: 2, step: 1, stream } }])
++    expect(fold.routes.get(routeKey('unattributed', 'unattributed')))
++      .toEqual({ uncachedInputTokens: 30, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 })
++  })
++
++  it('ignores events with invalid usage buckets', () => {
++    const fold = foldSessionUsage([message(1, 1, { inputTokens: -5, outputTokens: 1 }), message(1, 2, { inputTokens: 10, outputTokens: 2 })])
++    expect(fold.totals.uncachedInputTokens).toBe(10)
++  })
++
++  it('buckets by local-calendar day and subtracts replacements from the old day', () => {
++    const morning = { type: 'assistant/message', time: new Date(2026, 8, 11, 1).getTime(), data: { turn: 1, step: 1, usage: { inputTokens: 100, outputTokens: 10 }, ...SOURCE } }
++    const evening = { type: 'assistant/message', time: new Date(2026, 8, 11, 23).getTime(), data: { turn: 1, step: 1, usage: { inputTokens: 200, outputTokens: 20 }, ...SOURCE } }
++    const fold = foldSessionUsage([morning, evening])
++    expect(fold.daily.size).toBe(1)
++    expect(fold.daily.get('2026-09-11')).toEqual({ uncachedInputTokens: 200, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 })
++  })
++
++  it('reports the raw event count for index keying', () => {
++    const events = [message(1, 1, { inputTokens: 1, outputTokens: 1 }), { type: 'user/message', time: 0, data: {} }]
++    expect(foldSessionUsage(events).eventCount).toBe(2)
++  })
++})
+diff --git a/packages/usage-host/tsconfig.json b/packages/usage-host/tsconfig.json
+new file mode 100644
+index 0000000..82b81ba
+--- /dev/null
++++ b/packages/usage-host/tsconfig.json
+@@ -0,0 +1,9 @@
++{
++  "extends": "../../tsconfig.base.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types",
++    "lib": ["ES2022"]
++  },
++  "include": ["src"]
++}
+diff --git a/packages/usage-host/tsdown.config.ts b/packages/usage-host/tsdown.config.ts
+new file mode 100644
+index 0000000..de89063
+--- /dev/null
++++ b/packages/usage-host/tsdown.config.ts
+@@ -0,0 +1,19 @@
++import { defineConfig } from 'tsdown'
++
++/**
++ * Node-only host half. The ./shared subpath (route paths and wire payload
++ * types for the client package) resolves the tsc-emitted tree directly, so
++ * the bundle has a single entry.
++ */
++export default defineConfig([
++  {
++    entry: ['lib/types/index.js'],
++    outDir: 'lib',
++    format: ['esm'],
++    platform: 'node',
++    target: 'es2022',
++    fixedExtension: false,
++    dts: false,
++    clean: false,
++  },
++])
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index efbcad6..6d6161f 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -181,20 +181,47 @@ importers:
+       tsdown:
+         specifier: ^0.12.0
+         version: 0.12.9(typescript@5.9.3)
+       typescript:
+         specifier: ^5.6.0
+         version: 5.9.3
+       vitest:
+         specifier: ^3.0.0
+         version: 3.2.7(@types/node@22.20.2)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)
+ 
++  packages/usage-host:
++    devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: link:../../../deepseek-harness/vendor/cordis
++        version: link:../../../deepseek-harness/vendor/cordis
++      '@deepseek-ai/dsh-host-webserver':
++        specifier: link:../../../deepseek-harness/packages/host/webserver
++        version: link:../../../deepseek-harness/packages/host/webserver
++      '@deepseek-ai/dsh-llm':
++        specifier: link:../../../deepseek-harness/packages/llm/llm
++        version: link:../../../deepseek-harness/packages/llm/llm
++      '@deepseek-ai/schemastery':
++        specifier: link:../../../deepseek-harness/vendor/schemastery
++        version: link:../../../deepseek-harness/vendor/schemastery
++      '@types/node':
++        specifier: ^22.0.0
++        version: 22.20.2
++      tsdown:
++        specifier: ^0.12.0
++        version: 0.12.9(typescript@5.9.3)
++      typescript:
++        specifier: ^5.7.0
++        version: 5.9.3
++      vitest:
++        specifier: ^3.0.0
++        version: 3.2.7(@types/node@22.20.2)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)
++
+ packages:
+ 
+   '@asamuzakjp/css-color@3.2.0':
+     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
+ 
+   '@babel/code-frame@7.29.7':
+     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
+     engines: {node: '>=6.9.0'}
+ 
+   '@babel/generator@7.29.8':

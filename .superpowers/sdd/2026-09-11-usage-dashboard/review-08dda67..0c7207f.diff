@@ -1,0 +1,350 @@
+# Review package: 08dda67..HEAD
+
+## Commits
+0c7207f fix(client-ui-usage): service-missing state, 60s polling, sessions card
+
+## Files changed
+ .../client-ui-usage/src/client/UsageSection.tsx    | 26 +++++++---
+ packages/client-ui-usage/src/client/controller.ts  |  5 ++
+ packages/client-ui-usage/src/client/locales.ts     |  4 ++
+ .../client-ui-usage/tests/usage-section.spec.tsx   | 56 +++++++++++++++++++++-
+ 4 files changed, 82 insertions(+), 9 deletions(-)
+
+## Diff
+diff --git a/packages/client-ui-usage/src/client/UsageSection.tsx b/packages/client-ui-usage/src/client/UsageSection.tsx
+index 0527f04..91fb2b8 100644
+--- a/packages/client-ui-usage/src/client/UsageSection.tsx
++++ b/packages/client-ui-usage/src/client/UsageSection.tsx
+@@ -4,20 +4,21 @@
+  * table. Data arrives through the inject face (one shared UsageController);
+  * while the host reports a scan in progress the section re-polls on a fixed
+  * cadence, and a failed read degrades to an inline error with retry.
+  *
+  * @module dsh-client-ui-usage/UsageSection
+  */
+ 
+ import { Fragment, useEffect, useState } from 'react'
+ import type { ProviderUsageRow, UsageBuckets, UsageSummaryResponse } from 'dsh-usage-host/shared'
+ import type { InjectFace, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
++import { isServiceMissing } from './controller.ts'
+ import type { UsageController } from './controller.ts'
+ import { NS } from './locales.ts'
+ import css from './UsageSection.module.css'
+ 
+ /** Injected dependencies of {@link UsageSection} (the slot inject face). */
+ export interface UsageSectionInjected {
+   /** Data carrier for the usage summary route; one instance per plugin life. */
+   readonly controller: UsageController
+   /** The usage-namespace translator. */
+   readonly t: TranslateNS<typeof NS>
+@@ -26,20 +27,23 @@ export interface UsageSectionInjected {
+ /**
+  * Props delivered by the slot outlet: the inject face spread flat, each
+  * member optional until the shell injects — a direct render without the face
+  * mounts nothing (the ui-settings-models pattern).
+  */
+ export type UsageSectionProps = Partial<InjectFace<UsageSectionInjected>>
+ 
+ /** Re-poll cadence while the host reports a background scan. */
+ const POLL_MS = 5_000
+ 
++/** Re-poll cadence once the scan has settled — keeps the dashboard current. */
++const IDLE_POLL_MS = 60_000
++
+ /** How many most-recent days the chart renders. */
+ const DAILY_DAYS = 30
+ 
+ /** ≥1e6 → x.xM; ≥1e3 → x.xK; else the integer itself. */
+ function formatTokens(count: number): string {
+   if (count >= 1e6) return (count / 1e6).toFixed(1) + 'M'
+   if (count >= 1e3) return (count / 1e3).toFixed(1) + 'K'
+   return String(count)
+ }
+ 
+@@ -73,66 +77,67 @@ function pathTail(path: string): string {
+ }
+ 
+ /**
+  * Render the usage statistics section content.
+  * @param props - slot-delivered injected dependencies.
+  * @returns the section, or null while the shell has not injected yet.
+  */
+ export function UsageSection(props: UsageSectionProps) {
+   const { controller, t } = props
+   const [response, setResponse] = useState<UsageSummaryResponse | undefined>(undefined)
+-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
++  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'missing'>('loading')
+   // Keys of providers whose model breakdown the user collapsed; a provider
+   // absent from the set renders expanded.
+   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+   // Bumped by the retry button; the load effect re-runs with a fresh read.
+   const [reload, setReload] = useState(0)
+ 
+   useEffect(() => {
+     if (controller === undefined) return
+     let cancelled = false
+     let timer: ReturnType<typeof setTimeout> | undefined
+     const load = async (): Promise<void> => {
+       try {
+         const next = await controller.fetchSummary()
+         if (cancelled) return
+         setResponse(next)
+         setStatus('ready')
+-        // Scan in progress: re-poll on the fixed cadence until it settles.
+-        if (next.scanning) timer = setTimeout(() => { void load() }, POLL_MS)
+-      } catch {
+-        if (!cancelled) setStatus('error')
++        // Scan in progress: fast cadence until it settles; afterwards a slow
++        // keep-fresh cadence. Either way the cleanup clears the pending timer.
++        timer = setTimeout(() => { void load() }, next.scanning ? POLL_MS : IDLE_POLL_MS)
++      } catch (error) {
++        if (!cancelled) setStatus(isServiceMissing(error) ? 'missing' : 'error')
+       }
+     }
+     void load()
+     return () => {
+       cancelled = true
+       if (timer !== undefined) clearTimeout(timer)
+     }
+   }, [controller, reload])
+ 
+   if (controller === undefined || t === undefined) return null
+ 
+   const toggleProvider = (key: string): void => {
+     setCollapsed(current => {
+       const next = new Set(current)
+       if (next.has(key)) next.delete(key)
+       else next.add(key)
+       return next
+     })
+   }
+ 
+-  if (status === 'error') {
++  if (status === 'error' || status === 'missing') {
+     return (
+       <div className={css.section}>
+         <div className={css.error}>
+-          <p>{t('state.error')}</p>
++          <p>{status === 'missing' ? t('state.serviceMissing') : t('state.error')}</p>
+           <button type="button" className={css.retry} onClick={() => { setReload(current => current + 1) }}>
+             {t('state.retry')}
+           </button>
+         </div>
+       </div>
+     )
+   }
+ 
+   if (response === undefined) {
+     return <div className={css.section}><p>{t('state.scanning')}</p></div>
+@@ -169,20 +174,27 @@ export function UsageSection(props: UsageSectionProps) {
+         </div>
+         {response.estimate !== undefined
+           ? (
+             <div className={css.card}>
+               <span className={css.cardLabel}>{t('estimate.title')}</span>
+               <span className={css.cardValue}>{formatUsd(response.estimate.totalUsd)}</span>
+               <span className={css.cardLabel}>{t('estimate.disclaimer')}</span>
+             </div>
+           )
+           : null}
++        <div className={css.card}>
++          <span className={css.cardLabel}>{t('summary.sessions')}</span>
++          <span className={css.cardValue}>{String(response.sessionCount)}</span>
++          {response.skippedSessions > 0
++            ? <span className={css.cardLabel}>{t('summary.skipped', { count: response.skippedSessions })}</span>
++            : null}
++        </div>
+       </div>
+ 
+       <h3>{t('providers.title')}</h3>
+       {response.providers.length === 0
+         ? <p>{t('state.empty')}</p>
+         : (
+           <table className={css.table}>
+             <thead>
+               <tr>
+                 <th scope="col" aria-label={t('providers.title')} />
+diff --git a/packages/client-ui-usage/src/client/controller.ts b/packages/client-ui-usage/src/client/controller.ts
+index 39d4db8..c0b5d1f 100644
+--- a/packages/client-ui-usage/src/client/controller.ts
++++ b/packages/client-ui-usage/src/client/controller.ts
+@@ -8,20 +8,25 @@
+ 
+ import { USAGE_SUMMARY_ROUTE, type UsageSummaryResponse } from 'dsh-usage-host/shared'
+ 
+ function hostBase(): string {
+   const origin = (globalThis as { location?: { origin?: string } }).location?.origin
+   return origin !== undefined && origin !== 'null' ? origin : 'http://dsh.internal'
+ }
+ 
+ const TTL_MS = 5_000
+ 
++/** The thrown surface of a 404 from the summary route: the usage service is not installed on this host. */
++export function isServiceMissing(error: unknown): boolean {
++  return error instanceof Error && error.message === 'usage: summary route failed with 404'
++}
++
+ export class UsageController {
+   private readonly fetcher: typeof fetch
+   private inflight: Promise<UsageSummaryResponse> | undefined
+   private lastResolved: UsageSummaryResponse | undefined
+   private fetchedAt = 0
+ 
+   constructor(fetcher: typeof fetch = (input, init) => fetch(input, init)) {
+     this.fetcher = fetcher
+   }
+ 
+diff --git a/packages/client-ui-usage/src/client/locales.ts b/packages/client-ui-usage/src/client/locales.ts
+index a5a5921..2ec0545 100644
+--- a/packages/client-ui-usage/src/client/locales.ts
++++ b/packages/client-ui-usage/src/client/locales.ts
+@@ -15,20 +15,22 @@ export const NS = 'usage'
+ export const zh = {
+   'nav': '使用统计',
+   'summary.title': '用量总览',
+   'buckets.uncachedInput': '未缓存输入',
+   'buckets.output': '输出',
+   'buckets.cacheRead': '缓存读取',
+   'buckets.cacheWrite': '缓存写入',
+   'buckets.total': '总计',
+   'estimate.disclaimer': '金额为按价目表估算,可能与实际账单不一致',
+   'estimate.title': '估算金额',
++  'summary.sessions': '会话数',
++  'summary.skipped': '{count} 个会话已跳过',
+   'providers.title': '提供商',
+   'models.title': '模型',
+   'daily.title': '按日用量',
+   'sessions.title': '会话排行',
+   'sessions.untitled': '(无标题会话)',
+   'state.scanning': '正在扫描会话历史…',
+   'state.empty': '暂无用量数据',
+   'state.error': '用量数据加载失败',
+   'state.retry': '重试',
+   'state.serviceMissing': '使用统计服务未安装或未响应',
+@@ -41,20 +43,22 @@ export const zh = {
+ export const en: Record<UsageKey, string> = {
+   'nav': 'Usage',
+   'summary.title': 'Usage overview',
+   'buckets.uncachedInput': 'Uncached input',
+   'buckets.output': 'Output',
+   'buckets.cacheRead': 'Cache read',
+   'buckets.cacheWrite': 'Cache write',
+   'buckets.total': 'Total',
+   'estimate.disclaimer': 'Amounts are estimated from the price list and may differ from actual billing',
+   'estimate.title': 'Estimated amount',
++  'summary.sessions': 'Sessions',
++  'summary.skipped': '{count} sessions skipped',
+   'providers.title': 'Providers',
+   'models.title': 'Models',
+   'daily.title': 'Daily usage',
+   'sessions.title': 'Top sessions',
+   'sessions.untitled': '(Untitled session)',
+   'state.scanning': 'Scanning session history…',
+   'state.empty': 'No usage data yet',
+   'state.error': 'Failed to load usage data',
+   'state.retry': 'Retry',
+   'state.serviceMissing': 'The usage service is not installed or not responding',
+diff --git a/packages/client-ui-usage/tests/usage-section.spec.tsx b/packages/client-ui-usage/tests/usage-section.spec.tsx
+index d9c0c32..74d1cd0 100644
+--- a/packages/client-ui-usage/tests/usage-section.spec.tsx
++++ b/packages/client-ui-usage/tests/usage-section.spec.tsx
+@@ -1,12 +1,12 @@
+-import { describe, expect, it, vi } from 'vitest'
+-import { render, screen, waitFor } from '@testing-library/react'
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { cleanup, render, screen, waitFor } from '@testing-library/react'
+ import { UsageSection } from '../src/client/UsageSection.tsx'
+ import { zh } from '../src/client/locales.ts'
+ import type { UsageSummaryResponse } from 'dsh-usage-host/shared'
+ 
+ const SUMMARY: UsageSummaryResponse = {
+   generatedAt: 0,
+   scanning: false,
+   sessionCount: 2,
+   skippedSessions: 0,
+   totals: { uncachedInputTokens: 1000, outputTokens: 500, cacheReadTokens: 2000, cacheWriteTokens: 0 },
+@@ -36,20 +36,22 @@ const t = (key: string, vars?: Record<string, string | number>): string => {
+   return text
+ }
+ 
+ function mount(response: UsageSummaryResponse, fetchSummary = vi.fn().mockResolvedValue(response)) {
+   const controller = { fetchSummary } as never
+   render(<UsageSection controller={controller} t={t as never} />)
+   return fetchSummary
+ }
+ 
+ describe('UsageSection', () => {
++  afterEach(() => { cleanup() })
++
+   it('renders provider rows with model detail and estimate', async () => {
+     mount(SUMMARY)
+     await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy())
+     expect(screen.getByText('DeepSeek V4 Flash')).toBeTruthy()
+     expect(screen.getByText('大项目')).toBeTruthy()
+   })
+ 
+   it('keeps polling while scanning and stops when settled', async () => {
+     vi.useFakeTimers()
+     const fetchSummary = vi.fn()
+@@ -74,11 +76,61 @@ describe('UsageSection', () => {
+     }
+     mount(unpriced)
+     await waitFor(() => expect(screen.getByText(/goblin-9x/)).toBeTruthy())
+   })
+ 
+   it('shows the error state with retry after a failed fetch', async () => {
+     mount(SUMMARY, vi.fn().mockRejectedValue(new Error('boom')))
+     await waitFor(() => expect(screen.getByText(t('state.error'))).toBeTruthy())
+     expect(screen.getByText(t('state.retry'))).toBeTruthy()
+   })
++
++  it('renders the service-missing state when the route answers 404', async () => {
++    mount(SUMMARY, vi.fn().mockRejectedValue(new Error('usage: summary route failed with 404')))
++    await waitFor(() => expect(screen.getByText(t('state.serviceMissing'))).toBeTruthy())
++    expect(screen.queryByText(t('state.error'))).toBeNull()
++  })
++
++  it('renders the generic error state for other failures', async () => {
++    mount(SUMMARY, vi.fn().mockRejectedValue(new Error('usage: summary route failed with 503')))
++    await waitFor(() => expect(screen.getByText(t('state.error'))).toBeTruthy())
++    expect(screen.queryByText(t('state.serviceMissing'))).toBeNull()
++  })
++
++  it('schedules exactly one refetch 60s after a settled response', async () => {
++    vi.useFakeTimers()
++    const fetchSummary = vi.fn().mockResolvedValue(SUMMARY)
++    mount(SUMMARY, fetchSummary)
++    await vi.advanceTimersByTimeAsync(0)
++    expect(fetchSummary).toHaveBeenCalledTimes(1)
++    await vi.advanceTimersByTimeAsync(59_000)
++    expect(fetchSummary).toHaveBeenCalledTimes(1)
++    await vi.advanceTimersByTimeAsync(2_000)
++    expect(fetchSummary).toHaveBeenCalledTimes(2)
++    vi.useRealTimers()
++  })
++
++  it('cancels the pending 60s refetch on unmount', async () => {
++    vi.useFakeTimers()
++    const fetchSummary = vi.fn().mockResolvedValue(SUMMARY)
++    const controller = { fetchSummary } as never
++    const { unmount } = render(<UsageSection controller={controller} t={t as never} />)
++    await vi.advanceTimersByTimeAsync(0)
++    expect(fetchSummary).toHaveBeenCalledTimes(1)
++    unmount()
++    await vi.advanceTimersByTimeAsync(61_000)
++    expect(fetchSummary).toHaveBeenCalledTimes(1)
++    vi.useRealTimers()
++  })
++
++  it('renders the session count card with a skipped sub-line', async () => {
++    mount({ ...SUMMARY, sessionCount: 7, skippedSessions: 2 })
++    await waitFor(() => expect(screen.getByText('7')).toBeTruthy())
++    expect(screen.getByText(t('summary.skipped', { count: 2 }))).toBeTruthy()
++  })
++
++  it('omits the skipped sub-line when no session was skipped', async () => {
++    mount({ ...SUMMARY, sessionCount: 7, skippedSessions: 0 })
++    await waitFor(() => expect(screen.getByText('7')).toBeTruthy())
++    expect(screen.queryByText(t('summary.skipped', { count: 0 }))).toBeNull()
++  })
+ })

@@ -1,0 +1,585 @@
+# Review package: 70b6ba9..HEAD
+
+## Commits
+573bfb9 feat(client-ui-usage): bilingual usage dictionaries
+f482b67 feat(client-ui-usage): summary fetch carrier
+916b74a feat(client-ui-usage): package scaffold
+
+## Files changed
+ packages/client-ui-usage/package.json             |  65 +++++++++++++
+ packages/client-ui-usage/src/client/controller.ts |  49 ++++++++++
+ packages/client-ui-usage/src/client/index.ts      |   1 +
+ packages/client-ui-usage/src/client/locales.ts    |  69 ++++++++++++++
+ packages/client-ui-usage/src/index.ts             |   7 ++
+ packages/client-ui-usage/tests/controller.spec.ts |  89 ++++++++++++++++++
+ packages/client-ui-usage/tests/locales.spec.ts    |   8 ++
+ packages/client-ui-usage/tsconfig.json            |  10 ++
+ packages/client-ui-usage/tsdown.config.ts         | 108 ++++++++++++++++++++++
+ pnpm-lock.yaml                                    |  60 ++++++++++++
+ vitest.config.ts                                  |   1 +
+ 11 files changed, 467 insertions(+)
+
+## Diff
+diff --git a/packages/client-ui-usage/package.json b/packages/client-ui-usage/package.json
+new file mode 100644
+index 0000000..84653b7
+--- /dev/null
++++ b/packages/client-ui-usage/package.json
+@@ -0,0 +1,65 @@
++{
++  "name": "dsh-client-ui-usage",
++  "description": "Settings usage-statistics dashboard over the dsh-usage-host summary route",
++  "version": "0.1.0",
++  "license": "MIT",
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./client": {
++      "types": "./lib/types/client/index.d.ts",
++      "default": "./lib/client.js"
++    },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json"
++  },
++  "dsh": {
++    "client": {
++      "inject": [
++        "@deepseek-ai/dsh-client-ui-settings",
++        "@deepseek-ai/dsh-client-locale",
++        "@deepseek-ai/dsh-client-ui-primitives"
++      ],
++      "platform": "web"
++    }
++  },
++  "files": [
++    "lib/index.js",
++    "lib/client.js",
++    "lib/types/**/*.d.ts"
++  ],
++  "scripts": {
++    "build": "tsc -p tsconfig.json && tsdown",
++    "test": "vitest run"
++  },
++  "peerDependencies": {
++    "@deepseek-ai/cordis": ">=4",
++    "react": "^18.2.0"
++  },
++  "devDependencies": {
++    "@deepseek-ai/cordis": "link:../../../deepseek-harness/vendor/cordis",
++    "@deepseek-ai/dsh-client-locale": "link:../../../deepseek-harness/packages/client/locale",
++    "@deepseek-ai/dsh-client-store": "link:../../../deepseek-harness/packages/client/store",
++    "@deepseek-ai/dsh-client-ui-primitives": "link:../../../deepseek-harness/packages/client/ui-primitives",
++    "@deepseek-ai/dsh-client-ui-renderer": "link:../../../deepseek-harness/packages/client/ui-renderer",
++    "@deepseek-ai/dsh-client-ui-session": "link:../../../deepseek-harness/packages/client/ui-session",
++    "@deepseek-ai/dsh-client-ui-settings": "link:../../../deepseek-harness/packages/client/ui-settings",
++    "@deepseek-ai/dsh-client-ui-slots": "link:../../../deepseek-harness/packages/client/ui-slots",
++    "dsh-usage-host": "workspace:^",
++    "@testing-library/react": "^16.1.0",
++    "@types/react": "~18.3.1",
++    "jsdom": "^25.0.0",
++    "lightningcss": "^1.28.0",
++    "react": "^18.2.0",
++    "typescript": "^5.6.0",
++    "tsdown": "^0.12.0",
++    "vitest": "^3.0.0",
++    "react-dom": "^18.2.0",
++    "@types/react-dom": "~18.3.1"
++  }
++}
+diff --git a/packages/client-ui-usage/src/client/controller.ts b/packages/client-ui-usage/src/client/controller.ts
+new file mode 100644
+index 0000000..39d4db8
+--- /dev/null
++++ b/packages/client-ui-usage/src/client/controller.ts
+@@ -0,0 +1,49 @@
++/**
++ * Browser data carrier: one fetch surface for the usage summary route with a
++ * short dedupe TTL. One instance per plugin life, shared through the inject
++ * face.
++ *
++ * @module dsh-client-ui-usage/controller
++ */
++
++import { USAGE_SUMMARY_ROUTE, type UsageSummaryResponse } from 'dsh-usage-host/shared'
++
++function hostBase(): string {
++  const origin = (globalThis as { location?: { origin?: string } }).location?.origin
++  return origin !== undefined && origin !== 'null' ? origin : 'http://dsh.internal'
++}
++
++const TTL_MS = 5_000
++
++export class UsageController {
++  private readonly fetcher: typeof fetch
++  private inflight: Promise<UsageSummaryResponse> | undefined
++  private lastResolved: UsageSummaryResponse | undefined
++  private fetchedAt = 0
++
++  constructor(fetcher: typeof fetch = (input, init) => fetch(input, init)) {
++    this.fetcher = fetcher
++  }
++
++  async fetchSummary(limit = 20): Promise<UsageSummaryResponse> {
++    if (this.inflight !== undefined) return this.inflight
++    if (this.lastResolved !== undefined && Date.now() - this.fetchedAt < TTL_MS) return this.lastResolved
++    this.inflight = this.run(limit)
++      .then((response) => {
++        this.fetchedAt = Date.now()
++        this.lastResolved = response
++        return response
++      })
++      .finally(() => {
++        this.inflight = undefined
++      })
++    return this.inflight
++  }
++
++  private async run(limit: number): Promise<UsageSummaryResponse> {
++    const url = new URL(USAGE_SUMMARY_ROUTE + '?limit=' + String(limit), hostBase())
++    const response = await this.fetcher(url, { headers: { accept: 'application/json' } })
++    if (!response.ok) throw new Error('usage: summary route failed with ' + String(response.status))
++    return await response.json() as UsageSummaryResponse
++  }
++}
+diff --git a/packages/client-ui-usage/src/client/index.ts b/packages/client-ui-usage/src/client/index.ts
+new file mode 100644
+index 0000000..355ced4
+--- /dev/null
++++ b/packages/client-ui-usage/src/client/index.ts
+@@ -0,0 +1 @@
++export function apply(): void {}
+diff --git a/packages/client-ui-usage/src/client/locales.ts b/packages/client-ui-usage/src/client/locales.ts
+new file mode 100644
+index 0000000..4af5b20
+--- /dev/null
++++ b/packages/client-ui-usage/src/client/locales.ts
+@@ -0,0 +1,69 @@
++/**
++ * usage namespace dictionaries for the settings usage-statistics dashboard.
++ *
++ * @module dsh-client-ui-usage/locales
++ */
++
++// Type-only: pulls the LocaleNamespaceMap declaration site so the merge below
++// lands on the real module.
++import type {} from '@deepseek-ai/dsh-client-ui-slots'
++
++/** Dictionary namespace owned by this plugin. */
++export const NS = 'usage'
++
++/** Simplified Chinese dictionary (the key-set source of truth). */
++export const zh = {
++  'nav': '使用统计',
++  'summary.title': '用量总览',
++  'buckets.uncachedInput': '未缓存输入',
++  'buckets.output': '输出',
++  'buckets.cacheRead': '缓存读取',
++  'buckets.cacheWrite': '缓存写入',
++  'buckets.total': '总计',
++  'estimate.disclaimer': '金额为按价目表估算,可能与实际账单不一致',
++  'providers.title': '提供商',
++  'models.title': '模型',
++  'daily.title': '按日用量',
++  'sessions.title': '会话排行',
++  'sessions.untitled': '(无标题会话)',
++  'state.scanning': '正在扫描会话历史…',
++  'state.empty': '暂无用量数据',
++  'state.error': '用量数据加载失败',
++  'state.retry': '重试',
++  'state.serviceMissing': '使用统计服务未安装或未响应',
++  'unpriced.notice': '以下模型未配置单价,未计入金额:{models}',
++  'share.of': '占比',
++} as const
++
++/** English dictionary, key-identical to the Chinese source of truth. */
++export const en: Record<UsageKey, string> = {
++  'nav': 'Usage',
++  'summary.title': 'Usage overview',
++  'buckets.uncachedInput': 'Uncached input',
++  'buckets.output': 'Output',
++  'buckets.cacheRead': 'Cache read',
++  'buckets.cacheWrite': 'Cache write',
++  'buckets.total': 'Total',
++  'estimate.disclaimer': 'Amounts are estimated from the price list and may differ from actual billing',
++  'providers.title': 'Providers',
++  'models.title': 'Models',
++  'daily.title': 'Daily usage',
++  'sessions.title': 'Top sessions',
++  'sessions.untitled': '(Untitled session)',
++  'state.scanning': 'Scanning session history…',
++  'state.empty': 'No usage data yet',
++  'state.error': 'Failed to load usage data',
++  'state.retry': 'Retry',
++  'state.serviceMissing': 'The usage service is not installed or not responding',
++  'unpriced.notice': 'The following models have no configured price and are not counted in amounts: {models}',
++  'share.of': 'Share',
++}
++
++/** Key domain of the usage namespace (zh is the source of truth). */
++export type UsageKey = keyof typeof zh
++
++declare module '@deepseek-ai/dsh-client-ui-slots' {
++  interface LocaleNamespaceMap {
++    usage: UsageKey
++  }
++}
+diff --git a/packages/client-ui-usage/src/index.ts b/packages/client-ui-usage/src/index.ts
+new file mode 100644
+index 0000000..1db6986
+--- /dev/null
++++ b/packages/client-ui-usage/src/index.ts
+@@ -0,0 +1,7 @@
++/**
++ * Node half: presence only, so the loader sees the package. All behavior is
++ * browser-side via exports["./client"].
++ * @module dsh-client-ui-usage
++ */
++
++export function apply(): void {}
+diff --git a/packages/client-ui-usage/tests/controller.spec.ts b/packages/client-ui-usage/tests/controller.spec.ts
+new file mode 100644
+index 0000000..542a51a
+--- /dev/null
++++ b/packages/client-ui-usage/tests/controller.spec.ts
+@@ -0,0 +1,89 @@
++/** Controller behavior: in-flight dedupe, 5s TTL, null-origin fallback, error surface. */
++
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { UsageController } from '../src/client/controller.ts'
++import { USAGE_SUMMARY_ROUTE, type UsageSummaryResponse } from 'dsh-usage-host/shared'
++
++afterEach(() => {
++  vi.useRealTimers()
++  vi.unstubAllGlobals()
++})
++
++/** One scripted fetch: records calls, answers per-URL canned replies. */
++function stubFetch(replies: Record<string, { status: number; body: unknown }>) {
++  const calls: { url: string; init?: RequestInit }[] = []
++  const fetcher = vi.fn(async (input: string | URL, init?: RequestInit) => {
++    const url = String(input)
++    calls.push({ url, init })
++    const reply = replies[url] ?? { status: 404, body: { code: 'usage/failed', message: 'no script' } }
++    return new Response(JSON.stringify(reply.body), { status: reply.status, headers: { 'content-type': 'application/json' } })
++  }) as unknown as typeof fetch
++  vi.stubGlobal('fetch', fetcher)
++  return { calls, fetcher }
++}
++
++/** One minimal summary payload; every field the controller never inspects is dropped. */
++function summaryBody(): UsageSummaryResponse {
++  return {
++    generatedAt: 1,
++    scanning: false,
++    sessionCount: 3,
++    skippedSessions: 0,
++    totals: { uncachedInputTokens: 10, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 40 },
++    providers: [],
++    daily: [],
++    topSessions: [],
++    unpricedModels: [],
++    estimate: undefined,
++  }
++}
++
++describe('UsageController', () => {
++  it('falls back to the dsh.internal host base when location.origin is untrustworthy', async () => {
++    vi.stubGlobal('location', { origin: 'null' })
++    const body = summaryBody()
++    const { calls } = stubFetch({ ['http://dsh.internal' + USAGE_SUMMARY_ROUTE + '?limit=20']: { status: 200, body } })
++    const controller = new UsageController()
++    const result = await controller.fetchSummary()
++    expect(calls).toHaveLength(1)
++    expect(calls[0]?.url).toBe('http://dsh.internal/dsh-usage/summary?limit=20')
++    expect(calls[0]?.init?.headers).toEqual({ accept: 'application/json' })
++    expect(result).toEqual(body)
++  })
++
++  it('shares one in-flight request across concurrent callers', async () => {
++    const body = summaryBody()
++    const { calls, fetcher } = stubFetch({ [(globalThis.location?.origin ?? 'http://dsh.internal') + USAGE_SUMMARY_ROUTE + '?limit=20']: { status: 200, body } })
++    const controller = new UsageController()
++    const first = controller.fetchSummary()
++    const second = controller.fetchSummary()
++    const [a, b] = await Promise.all([first, second])
++    // The async facade wraps the shared in-flight; identity holds on the resolved value.
++    expect(b).toBe(a)
++    expect(a).toEqual(body)
++    expect(calls).toHaveLength(1)
++    expect(fetcher).toHaveBeenCalledTimes(1)
++  })
++
++  it('throws with the status code when the route answers non-ok', async () => {
++    stubFetch({ [(globalThis.location?.origin ?? 'http://dsh.internal') + USAGE_SUMMARY_ROUTE + '?limit=20']: { status: 503, body: { code: 'usage/busy', message: 'scanning' } } })
++    const controller = new UsageController()
++    await expect(controller.fetchSummary()).rejects.toThrow('usage: summary route failed with 503')
++  })
++
++  it('serves the last successful response inside the TTL without re-fetching', async () => {
++    vi.useFakeTimers()
++    const body = summaryBody()
++    const { calls } = stubFetch({ [(globalThis.location?.origin ?? 'http://dsh.internal') + USAGE_SUMMARY_ROUTE + '?limit=20']: { status: 200, body } })
++    const controller = new UsageController()
++    const first = await controller.fetchSummary()
++    vi.advanceTimersByTime(4_000)
++    const second = await controller.fetchSummary()
++    expect(second).toBe(first)
++    expect(calls).toHaveLength(1)
++    vi.advanceTimersByTime(1_500)
++    const third = await controller.fetchSummary()
++    expect(third).toEqual(body)
++    expect(calls).toHaveLength(2)
++  })
++})
+diff --git a/packages/client-ui-usage/tests/locales.spec.ts b/packages/client-ui-usage/tests/locales.spec.ts
+new file mode 100644
+index 0000000..a323159
+--- /dev/null
++++ b/packages/client-ui-usage/tests/locales.spec.ts
+@@ -0,0 +1,8 @@
++import { describe, expect, it } from 'vitest'
++import { en, zh } from '../src/client/locales.ts'
++
++describe('usage locale', () => {
++  it('keeps en keys aligned with the zh source of truth', () => {
++    expect(Object.keys(en).sort()).toEqual(Object.keys(zh).sort())
++  })
++})
+diff --git a/packages/client-ui-usage/tsconfig.json b/packages/client-ui-usage/tsconfig.json
+new file mode 100644
+index 0000000..61515a1
+--- /dev/null
++++ b/packages/client-ui-usage/tsconfig.json
+@@ -0,0 +1,10 @@
++{
++  "extends": "../../tsconfig.base.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types",
++    "jsx": "react-jsx",
++    "lib": ["ES2022", "DOM", "DOM.Iterable"]
++  },
++  "include": ["src"]
++}
+diff --git a/packages/client-ui-usage/tsdown.config.ts b/packages/client-ui-usage/tsdown.config.ts
+new file mode 100644
+index 0000000..ec7f529
+--- /dev/null
++++ b/packages/client-ui-usage/tsdown.config.ts
+@@ -0,0 +1,108 @@
++import { readFile } from 'node:fs/promises'
++import { basename, dirname, resolve as resolvePath } from 'node:path'
++import { defineConfig, type UserConfig } from 'tsdown'
++import { transform } from 'lightningcss'
++
++/**
++ * Dual-face build: the node half bundles the tsc-emitted entry into
++ * lib/index.js; the browser half bundles lib/types/client/index.js into the
++ * single-file CJS closure factory lib/client.js the Web module loader
++ * consumes. @deepseek-ai/* specifiers stay module-table externals (never
++ * bundled); everything else inlines. CSS Modules compile inline and inject a
++ * tagged <style> at factory execution.
++ */
++
++const id = 'dsh-client-ui-usage'
++
++/** Module-table specifiers this bundle requires from the loader, verbatim. */
++const EXTERNALS = [
++  'react',
++  'react/jsx-runtime',
++  '@deepseek-ai/cordis',
++  '@deepseek-ai/dsh-client-ui-slots',
++  '@deepseek-ai/dsh-client-ui-primitives',
++] as const
++
++const isExternal = (specifier: string): boolean =>
++  (EXTERNALS as readonly string[]).includes(specifier)
++
++/** Map a lib-relative stylesheet import back to its src file. */
++function sourceAssetPath(source: string, importer: string): string {
++  const emitted = resolvePath(dirname(importer), source)
++  const boundary = emitted.indexOf('lib' + '/' + 'types' + '/')
++  if (boundary < 0) return emitted
++  return resolvePath(emitted.slice(0, boundary), 'src', emitted.slice(boundary + 'lib/types/'.length))
++}
++
++/** One style injector plus the hashed class map, as the virtual module body. */
++function styleModule(fileId: string, cssText: string, classMap?: Record<string, string>): string {
++  const tagId = id + '/' + basename(fileId)
++  const lines = [
++    'const css = ' + JSON.stringify(cssText) + ';',
++    'const tagId = ' + JSON.stringify(tagId) + ';',
++    "if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify(tagId) + ']') === null) {",
++    "  const tag = document.createElement('style');",
++    '  tag.dataset.plugin = ' + JSON.stringify(id) + ';',
++    '  tag.dataset.pluginCss = tagId;',
++    '  tag.textContent = css;',
++    '  document.head.appendChild(tag);',
++    '}',
++  ]
++  lines.push(classMap === undefined ? 'export {};' : 'export default ' + JSON.stringify(classMap) + ';')
++  return lines.join('\n')
++}
++
++/** CSS Modules virtual loader: compile, inject, and export the class map. */
++const cssModulesPlugin = {
++  name: 'dsh-usage-css-modules',
++  enforce: 'pre' as const,
++  resolveId(source: string, importer: string | undefined): string | null {
++    if (!source.endsWith('.module.css')) return null
++    const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
++    return '\0dsh-css:' + abs + '.mjs'
++  },
++  async load(virtualId: string): Promise<string | null> {
++    if (!virtualId.startsWith('\0dsh-css:')) return null
++    const fileId = virtualId.slice('\0dsh-css:'.length, -'.mjs'.length)
++    const source = await readFile(fileId)
++    const result = transform({ filename: fileId, code: source, minify: true, cssModules: true })
++    const classMap: Record<string, string> = {}
++    for (const [local, exp] of Object.entries(result.exports ?? {})) classMap[local] = exp.name
++    return styleModule(fileId, result.code.toString(), classMap)
++  },
++}
++
++const node: UserConfig = {
++  entry: ['lib/types/index.js'],
++  outDir: 'lib',
++  format: ['esm'],
++  platform: 'node',
++  target: 'es2022',
++  fixedExtension: false,
++  dts: false,
++  clean: false,
++}
++
++const client: UserConfig = {
++  name: id + '/client',
++  entry: { client: 'lib/types/client/index.js' },
++  outDir: 'lib',
++  format: 'cjs',
++  platform: 'browser',
++  dts: false,
++  sourcemap: true,
++  clean: false,
++  deps: {
++    neverBundle: isExternal,
++    alwaysBundle: (specifier: string) => !isExternal(specifier),
++  },
++  plugins: [cssModulesPlugin],
++  outputOptions: {
++    entryFileNames: 'client.js',
++    banner: 'window.__ModuleLoader__.load({ id: ' + JSON.stringify(id) + ', factory: (require) => {',
++    footer: 'return module.exports; } });',
++    intro: 'var module = { exports: {} }; var exports = module.exports;',
++  },
++}
++
++export default defineConfig([node, client])
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 6d6161f..e327f79 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -125,20 +125,80 @@ importers:
+       tsdown:
+         specifier: ^0.12.0
+         version: 0.12.9(typescript@5.9.3)
+       typescript:
+         specifier: ^5.6.0
+         version: 5.9.3
+       vitest:
+         specifier: ^3.0.0
+         version: 3.2.7(@types/node@22.20.2)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)
+ 
++  packages/client-ui-usage:
++    devDependencies:
++      '@deepseek-ai/cordis':
++        specifier: link:../../../deepseek-harness/vendor/cordis
++        version: link:../../../deepseek-harness/vendor/cordis
++      '@deepseek-ai/dsh-client-locale':
++        specifier: link:../../../deepseek-harness/packages/client/locale
++        version: link:../../../deepseek-harness/packages/client/locale
++      '@deepseek-ai/dsh-client-store':
++        specifier: link:../../../deepseek-harness/packages/client/store
++        version: link:../../../deepseek-harness/packages/client/store
++      '@deepseek-ai/dsh-client-ui-primitives':
++        specifier: link:../../../deepseek-harness/packages/client/ui-primitives
++        version: link:../../../deepseek-harness/packages/client/ui-primitives
++      '@deepseek-ai/dsh-client-ui-renderer':
++        specifier: link:../../../deepseek-harness/packages/client/ui-renderer
++        version: link:../../../deepseek-harness/packages/client/ui-renderer
++      '@deepseek-ai/dsh-client-ui-session':
++        specifier: link:../../../deepseek-harness/packages/client/ui-session
++        version: link:../../../deepseek-harness/packages/client/ui-session
++      '@deepseek-ai/dsh-client-ui-settings':
++        specifier: link:../../../deepseek-harness/packages/client/ui-settings
++        version: link:../../../deepseek-harness/packages/client/ui-settings
++      '@deepseek-ai/dsh-client-ui-slots':
++        specifier: link:../../../deepseek-harness/packages/client/ui-slots
++        version: link:../../../deepseek-harness/packages/client/ui-slots
++      '@testing-library/react':
++        specifier: ^16.1.0
++        version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
++      '@types/react':
++        specifier: ~18.3.1
++        version: 18.3.31
++      '@types/react-dom':
++        specifier: ~18.3.1
++        version: 18.3.7(@types/react@18.3.31)
++      dsh-usage-host:
++        specifier: workspace:^
++        version: link:../usage-host
++      jsdom:
++        specifier: ^25.0.0
++        version: 25.0.1
++      lightningcss:
++        specifier: ^1.28.0
++        version: 1.33.0
++      react:
++        specifier: ^18.2.0
++        version: 18.3.1
++      react-dom:
++        specifier: ^18.2.0
++        version: 18.3.1(react@18.3.1)
++      tsdown:
++        specifier: ^0.12.0
++        version: 0.12.9(typescript@5.9.3)
++      typescript:
++        specifier: ^5.6.0
++        version: 5.9.3
++      vitest:
++        specifier: ^3.0.0
++        version: 3.2.7(@types/node@22.20.2)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)
++
+   packages/git-host:
+     dependencies:
+       '@deepseek-ai/schemastery':
+         specifier: link:../../../deepseek-harness/vendor/schemastery
+         version: link:../../../deepseek-harness/vendor/schemastery
+     devDependencies:
+       '@deepseek-ai/cordis':
+         specifier: link:../../../deepseek-harness/vendor/cordis
+         version: link:../../../deepseek-harness/vendor/cordis
+       '@deepseek-ai/dsh-host-webserver':
+diff --git a/vitest.config.ts b/vitest.config.ts
+index 3d47cad..996ec8a 100644
+--- a/vitest.config.ts
++++ b/vitest.config.ts
+@@ -1,12 +1,13 @@
+ import { defineConfig } from 'vitest/config'
+ 
+ export default defineConfig({
+   esbuild: { jsx: 'automatic' },
+   test: {
+     include: ['packages/*/tests/**/*.spec.ts', 'packages/*/tests/**/*.spec.tsx'],
+     environmentMatchGlobs: [
+       ['packages/client-ui-git/tests/**', 'jsdom'],
+       ['packages/client-ui-memory/tests/**', 'jsdom'],
++      ['packages/client-ui-usage/tests/**', 'jsdom'],
+     ],
+   },
+ })

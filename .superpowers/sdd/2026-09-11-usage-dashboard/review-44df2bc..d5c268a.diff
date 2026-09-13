@@ -1,0 +1,516 @@
+# Review package: 44df2bc..HEAD
+
+## Commits
+d5c268a feat(usage-host): background scan orchestration with incremental index
+03059ef feat(usage-host): durable incremental usage index
+
+## Files changed
+ packages/usage-host/src/service.ts            | 157 ++++++++++++++++++++++
+ packages/usage-host/src/usage-index.ts        |  60 +++++++++
+ packages/usage-host/tests/service.spec.ts     | 181 ++++++++++++++++++++++++++
+ packages/usage-host/tests/usage-index.spec.ts |  80 ++++++++++++
+ 4 files changed, 478 insertions(+)
+
+## Diff
+diff --git a/packages/usage-host/src/service.ts b/packages/usage-host/src/service.ts
+new file mode 100644
+index 0000000..4daf414
+--- /dev/null
++++ b/packages/usage-host/src/service.ts
+@@ -0,0 +1,157 @@
++/**
++ * Scan orchestration: sessionQuery corpus in, cached summary response out.
++ * One background pass at a time; the persisted index plus the cheap
++ * event-count probe keep steady-state refreshes off unchanged sessions. When
++ * the corpus offers no probe, change detection falls back to a full re-read
++ * (correct but slow), throttled by refreshMs.
++ *
++ * @module dsh-usage-host/service
++ */
++
++import { homedir } from 'node:os'
++import { join } from 'node:path'
++import { aggregateSessions, type AggregateInput } from './aggregate.ts'
++import { foldSessionUsage, type RawUsageEvent } from './fold-usage.ts'
++import { buildNormalizer, loadModelRegistry } from './registry.ts'
++import type { UsageBuckets, UsageSummaryResponse } from './shared.ts'
++import { entryOf, loadIndex, saveIndexAtomic, type SessionIndexEntry } from './usage-index.ts'
++
++export interface SessionQueryLike {
++  listSessions(): Promise<Array<{ header: { id: string; createdAt: number; cwd?: string } }>>
++  readSession(id: string): Promise<{ session: { id: string; createdAt: number; cwd?: string }; events: readonly RawUsageEvent[] }>
++  readTitle(id: string): Promise<{ title: string } | undefined>
++  /** Optional cheap change probe: the session's current raw event count. */
++  eventCount?(id: string): Promise<number | undefined>
++}
++
++export interface UsageServiceOptions {
++  readonly registryOverridesPath?: string
++  readonly indexPath?: string
++  /** 两次扫描之间的最小间隔毫秒;测试传 0。 */
++  readonly refreshMs?: number
++}
++
++const EMPTY_TOTALS: UsageBuckets = { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
++
++export class UsageService {
++  private readonly sessionQuery: SessionQueryLike
++  private readonly indexPath: string
++  private readonly registryOverridesPath: string
++  private readonly refreshMs: number
++  private scanning = false
++  private lastScanAt = 0
++  private cached: UsageSummaryResponse | undefined
++
++  constructor(sessionQuery: SessionQueryLike, options: UsageServiceOptions = {}) {
++    this.sessionQuery = sessionQuery
++    this.registryOverridesPath = options.registryOverridesPath
++      ?? join(homedir(), '.dsh', 'storages', 'usage-host', 'models.json')
++    this.refreshMs = options.refreshMs ?? 30_000
++    this.indexPath = options.indexPath ?? join(homedir(), '.dsh', 'storages', 'usage-host', 'index.json')
++  }
++
++  dispose(): void {
++    this.scanning = false
++  }
++
++  summary(limit = 20): UsageSummaryResponse {
++    if (!this.scanning && Date.now() - this.lastScanAt >= this.refreshMs) void this.scan(limit)
++    if (this.cached === undefined) {
++      return {
++        generatedAt: Date.now(), scanning: true, sessionCount: 0, skippedSessions: 0,
++        totals: EMPTY_TOTALS, providers: [], daily: [], topSessions: [],
++        unpricedModels: [], estimate: undefined,
++      }
++    }
++    return { ...this.cached, topSessions: this.cached.topSessions.slice(0, limit) }
++  }
++
++  private async scan(limit: number): Promise<void> {
++    if (this.scanning) return
++    this.scanning = true
++    try {
++      const normalizer = buildNormalizer(loadModelRegistry(this.registryOverridesPath))
++      const index = loadIndex(this.indexPath, normalizer.version)
++      const records = await this.sessionQuery.listSessions()
++      const sessions: Record<string, SessionIndexEntry> = {}
++      let skipped = 0
++
++      for (const record of records) {
++        const id = record.header.id
++        const cachedEntry = index.sessions[id]
++        try {
++          sessions[id] = cachedEntry === undefined
++            ? await this.refresh(id, undefined)
++            : await this.refreshOrReuse(id, cachedEntry)
++        } catch {
++          skipped += 1
++          if (cachedEntry !== undefined) sessions[id] = cachedEntry
++        }
++      }
++
++      await saveIndexAtomic(this.indexPath, { version: 1, normalizerVersion: normalizer.version, sessions })
++      const headerOf = new Map(records.map(record => [record.header.id, record.header]))
++      const inputs: AggregateInput[] = Object.entries(sessions).map(([sessionId, entry]) => {
++        const header = headerOf.get(sessionId)
++        return {
++          sessionId,
++          ...(entry.title === undefined ? {} : { title: entry.title }),
++          createdAt: header?.createdAt ?? 0,
++          ...(header?.cwd === undefined ? {} : { cwd: header.cwd }),
++          fold: {
++            eventCount: entry.eventCount,
++            totals: sumEntries([entry]),
++            routes: new Map(Object.entries(entry.routes)),
++            daily: new Map(Object.entries(entry.daily)),
++          },
++        }
++      })
++      const views = aggregateSessions(inputs, normalizer, limit)
++      this.cached = {
++        generatedAt: Date.now(),
++        scanning: false,
++        skippedSessions: skipped,
++        ...views,
++      }
++    } finally {
++      this.scanning = false
++      this.lastScanAt = Date.now()
++    }
++  }
++
++  /** 全量读取并折叠一个会话(新会话,或回退路径)。 */
++  private async refresh(id: string, previous: SessionIndexEntry | undefined): Promise<SessionIndexEntry> {
++    const loaded = await this.sessionQuery.readSession(id)
++    const fold = foldSessionUsage(loaded.events)
++    const title = (await this.sessionQuery.readTitle(id))?.title ?? previous?.title
++    return entryOf(fold, title)
++  }
++
++  /** 索引命中:探针短路或 eventCount 相同即复用;否则全量重折。 */
++  private async refreshOrReuse(id: string, cachedEntry: SessionIndexEntry): Promise<SessionIndexEntry> {
++    const probe = this.sessionQuery.eventCount
++    if (probe !== undefined) {
++      const count = await probe(id)
++      if (count === cachedEntry.eventCount) return cachedEntry
++      return this.refresh(id, cachedEntry)
++    }
++    const loaded = await this.sessionQuery.readSession(id)
++    if (loaded.events.length === cachedEntry.eventCount) return cachedEntry
++    const fold = foldSessionUsage(loaded.events)
++    const title = (await this.sessionQuery.readTitle(id))?.title ?? cachedEntry.title
++    return entryOf(fold, title)
++  }
++}
++
++function sumEntries(entries: readonly SessionIndexEntry[]): UsageBuckets {
++  const totals = { ...EMPTY_TOTALS }
++  for (const entry of entries) {
++    for (const buckets of Object.values(entry.routes)) {
++      totals.uncachedInputTokens += buckets.uncachedInputTokens
++      totals.outputTokens += buckets.outputTokens
++      totals.cacheReadTokens += buckets.cacheReadTokens
++      totals.cacheWriteTokens += buckets.cacheWriteTokens
++    }
++  }
++  return totals
++}
+diff --git a/packages/usage-host/src/usage-index.ts b/packages/usage-host/src/usage-index.ts
+new file mode 100644
+index 0000000..bba7c45
+--- /dev/null
++++ b/packages/usage-host/src/usage-index.ts
+@@ -0,0 +1,60 @@
++/**
++ * Durable per-session usage index: one JSON file, event-count keyed, atomic
++ * replace. Corruption or a normalizer-version change rebuilds from scratch.
++ *
++ * @module dsh-usage-host/usage-index
++ */
++
++import { readFileSync } from 'node:fs'
++import { mkdir, rename, writeFile } from 'node:fs/promises'
++import { dirname } from 'node:path'
++import type { SessionUsageFold } from './fold-usage.ts'
++import type { UsageBuckets } from './shared.ts'
++
++export interface SessionIndexEntry {
++  readonly eventCount: number
++  readonly title?: string
++  readonly routes: Record<string, UsageBuckets>
++  readonly daily: Record<string, UsageBuckets>
++}
++
++export interface UsageIndexFile {
++  readonly version: 1
++  readonly normalizerVersion: string
++  readonly sessions: Record<string, SessionIndexEntry>
++}
++
++function emptyIndex(normalizerVersion: string): UsageIndexFile {
++  return { version: 1, normalizerVersion, sessions: {} }
++}
++
++export function entryOf(fold: SessionUsageFold, title?: string): SessionIndexEntry {
++  const routes: Record<string, UsageBuckets> = {}
++  for (const [key, buckets] of fold.routes) routes[key] = buckets
++  const daily: Record<string, UsageBuckets> = {}
++  for (const [key, buckets] of fold.daily) daily[key] = buckets
++  return { eventCount: fold.eventCount, ...(title === undefined ? {} : { title }), routes, daily }
++}
++
++export function loadIndex(path: string, normalizerVersion: string): UsageIndexFile {
++  let parsed: unknown
++  try {
++    parsed = JSON.parse(readFileSync(path, 'utf8'))
++  } catch {
++    return emptyIndex(normalizerVersion)
++  }
++  if (typeof parsed !== 'object' || parsed === null) return emptyIndex(normalizerVersion)
++  const candidate = parsed as Partial<UsageIndexFile>
++  if (candidate.version !== 1 || candidate.normalizerVersion !== normalizerVersion
++    || typeof candidate.sessions !== 'object' || candidate.sessions === null) {
++    return emptyIndex(normalizerVersion)
++  }
++  return { version: 1, normalizerVersion, sessions: candidate.sessions }
++}
++
++export async function saveIndexAtomic(path: string, index: UsageIndexFile): Promise<void> {
++  await mkdir(dirname(path), { recursive: true })
++  const tmp = path + '.tmp-' + String(process.pid)
++  await writeFile(tmp, JSON.stringify(index))
++  await rename(tmp, path)
++}
+diff --git a/packages/usage-host/tests/service.spec.ts b/packages/usage-host/tests/service.spec.ts
+new file mode 100644
+index 0000000..2b258b4
+--- /dev/null
++++ b/packages/usage-host/tests/service.spec.ts
+@@ -0,0 +1,181 @@
++import { mkdtemp, rm } from 'node:fs/promises'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++import type { RawUsageEvent } from '../src/fold-usage.ts'
++import { UsageService, type SessionQueryLike } from '../src/service.ts'
++import { saveIndexAtomic } from '../src/usage-index.ts'
++
++vi.mock('../src/usage-index.ts', async importOriginal => {
++  const actual = await importOriginal<typeof import('../src/usage-index.ts')>()
++  return { ...actual, saveIndexAtomic: vi.fn(actual.saveIndexAtomic) }
++})
++
++const saveSpy = vi.mocked(saveIndexAtomic)
++
++function message(provider: string, model: string, output: number, turn = 1): RawUsageEvent {
++  return {
++    type: 'assistant/message',
++    time: new Date(2026, 8, 11).getTime(),
++    data: { turn, step: 1, usage: { inputTokens: 0, outputTokens: output }, message: { source: { provider, model } } },
++  }
++}
++
++interface FakeSession {
++  header: { id: string; createdAt: number; cwd?: string }
++  events: RawUsageEvent[]
++  title?: string
++  failRead?: boolean
++}
++
++function makeQuery(sessions: FakeSession[], withProbe: boolean): { query: SessionQueryLike; calls: { listSessions: number; readSession: Record<string, number> } } {
++  const calls = { listSessions: 0, readSession: {} as Record<string, number> }
++  const byId = new Map(sessions.map(session => [session.header.id, session]))
++  const query: SessionQueryLike = {
++    listSessions: async () => {
++      calls.listSessions += 1
++      return sessions.map(session => ({ header: session.header }))
++    },
++    readSession: async (id: string) => {
++      calls.readSession[id] = (calls.readSession[id] ?? 0) + 1
++      const session = byId.get(id)!
++      if (session.failRead) throw new Error('boom')
++      return { session: session.header, events: session.events }
++    },
++    readTitle: async (id: string) => {
++      const title = byId.get(id)?.title
++      return title === undefined ? undefined : { title }
++    },
++    ...(withProbe
++      ? { eventCount: async (id: string) => byId.get(id)?.events.length }
++      : {}),
++  }
++  return { query, calls }
++}
++
++/** Wait until no background scan is mid-flight (saveIndexAtomic count stable). */
++async function quiesce(): Promise<void> {
++  const deadline = Date.now() + 2000
++  let last = -1
++  while (Date.now() < deadline) {
++    const current = saveSpy.mock.calls.length
++    if (current === last) return
++    last = current
++    await new Promise(resolve => setTimeout(resolve, 25))
++  }
++  throw new Error('background scans did not settle')
++}
++
++describe('UsageService', () => {
++  let dir: string
++  let indexPath: string
++
++  beforeEach(async () => {
++    dir = await mkdtemp(join(tmpdir(), 'usage-service-'))
++    indexPath = join(dir, 'index.json')
++  })
++
++  afterEach(async () => {
++    await quiesce()
++    await rm(dir, { recursive: true, force: true })
++  })
++
++  function session(id: string, output: number, extra: Partial<FakeSession> = {}): FakeSession {
++    return {
++      header: { id, createdAt: 1000, cwd: '/tmp/' + id },
++      events: [message('deepseek', 'm1', output)],
++      title: 't-' + id,
++      ...extra,
++    }
++  }
++
++  it('scans in the background, reports a zero shell first, then the summary', async () => {
++    const a = session('a', 10, { failRead: true })
++    const b = session('b', 30)
++    const { query, calls } = makeQuery([a, b], false)
++    const service = new UsageService(query, { indexPath, refreshMs: 0 })
++
++    const first = service.summary()
++    expect(first.scanning).toBe(true)
++    expect(first.totals).toEqual({ uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })
++    expect(first.providers).toEqual([])
++
++    await vi.waitFor(() => {
++      expect(service.summary().scanning).toBe(false)
++    })
++    const done = service.summary()
++    expect(done.scanning).toBe(false)
++    expect(done.sessionCount).toBe(1)
++    expect(done.skippedSessions).toBe(1)
++    expect(done.totals.outputTokens).toBe(30)
++    expect(done.topSessions[0]?.sessionId).toBe('b')
++    expect(done.topSessions[0]?.title).toBe('t-b')
++    expect(calls.readSession['a']).toBeGreaterThan(0)
++  })
++
++  it('picks up a previously failing session on the next scan', async () => {
++    const a = session('a', 10, { failRead: true })
++    const b = session('b', 30)
++    const { query } = makeQuery([a, b], false)
++    const service = new UsageService(query, { indexPath, refreshMs: 0 })
++    await vi.waitFor(() => { expect(service.summary().scanning).toBe(false) })
++
++    a.failRead = false
++    await vi.waitFor(() => {
++      const summary = service.summary()
++      expect(summary.sessionCount).toBe(2)
++      expect(summary.skippedSessions).toBe(0)
++      expect(summary.totals.outputTokens).toBe(40)
++    })
++  })
++
++  it('throttles repeat summary() calls within the refresh window', async () => {
++    const { query, calls } = makeQuery([session('a', 10)], false)
++    const service = new UsageService(query, { indexPath, refreshMs: 60_000 })
++    await vi.waitFor(() => { expect(service.summary().scanning).toBe(false) })
++    await quiesce()
++    const afterFirstScan = calls.listSessions
++
++    service.summary()
++    service.summary()
++    service.summary()
++    expect(calls.listSessions).toBe(afterFirstScan)
++  })
++
++  it('short-circuits unchanged sessions via the eventCount probe and re-reads changed ones', async () => {
++    const a = session('a', 10)
++    const b = session('b', 30)
++    const { query, calls } = makeQuery([a, b], true)
++    const service = new UsageService(query, { indexPath, refreshMs: 0 })
++    await vi.waitFor(() => { expect(service.summary().scanning).toBe(false) })
++    await quiesce()
++    expect(calls.readSession).toEqual({ a: 1, b: 1 })
++
++    b.events = [...b.events, message('deepseek', 'm1', 5, 2)]
++    await vi.waitFor(() => {
++      service.summary()
++      expect(calls.readSession['b']).toBeGreaterThanOrEqual(2)
++    })
++    expect(calls.readSession['a']).toBe(1)
++    await quiesce()
++    expect(service.summary().totals.outputTokens).toBe(45)
++  })
++
++  it('falls back to a full re-read for unchanged sessions when no probe exists', async () => {
++    const a = session('a', 10)
++    const b = session('b', 30)
++    const { query, calls } = makeQuery([a, b], false)
++    const service = new UsageService(query, { indexPath, refreshMs: 0 })
++    await vi.waitFor(() => { expect(service.summary().scanning).toBe(false) })
++    await quiesce()
++
++    b.events = [...b.events, message('deepseek', 'm1', 5, 2)]
++    await vi.waitFor(() => {
++      service.summary()
++      expect(calls.readSession['a']).toBeGreaterThanOrEqual(2)
++      expect(calls.readSession['b']).toBeGreaterThanOrEqual(2)
++    })
++    await quiesce()
++    expect(service.summary().totals.outputTokens).toBe(45)
++  })
++})
+diff --git a/packages/usage-host/tests/usage-index.spec.ts b/packages/usage-host/tests/usage-index.spec.ts
+new file mode 100644
+index 0000000..dcd10fa
+--- /dev/null
++++ b/packages/usage-host/tests/usage-index.spec.ts
+@@ -0,0 +1,80 @@
++import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { afterEach, beforeEach, describe, expect, it } from 'vitest'
++import { emptyBuckets, foldSessionUsage, type RawUsageEvent } from '../src/fold-usage.ts'
++import { entryOf, loadIndex, saveIndexAtomic, type UsageIndexFile } from '../src/usage-index.ts'
++
++function message(provider: string, model: string, output: number, turn: number): RawUsageEvent {
++  return {
++    type: 'assistant/message',
++    time: new Date(2026, 8, 11).getTime(),
++    data: { turn, step: 1, usage: { inputTokens: 0, outputTokens: output }, message: { source: { provider, model } } },
++  }
++}
++
++describe('usage index', () => {
++  let dir: string
++  let path: string
++
++  beforeEach(async () => {
++    dir = await mkdtemp(join(tmpdir(), 'usage-index-'))
++    path = join(dir, 'nested', 'index.json')
++  })
++
++  afterEach(async () => {
++    await rm(dir, { recursive: true, force: true })
++  })
++
++  it('loads an empty index when the file does not exist', () => {
++    const index = loadIndex(path, 'v1:abc')
++    expect(index).toEqual({ version: 1, normalizerVersion: 'v1:abc', sessions: {} })
++  })
++
++  it('round-trips through saveIndexAtomic', async () => {
++    const fold = foldSessionUsage([message('deepseek', 'm1', 10, 1)])
++    const index: UsageIndexFile = {
++      version: 1,
++      normalizerVersion: 'v1:abc',
++      sessions: { s1: entryOf(fold, 'hello') },
++    }
++    await saveIndexAtomic(path, index)
++    expect(loadIndex(path, 'v1:abc')).toEqual(index)
++    expect(index.sessions['s1']!.title).toBe('hello')
++    expect(index.sessions['s1']!.eventCount).toBe(1)
++    expect(index.sessions['s1']!.routes).toEqual(Object.fromEntries(fold.routes))
++    expect(index.sessions['s1']!.daily).toEqual(Object.fromEntries(fold.daily))
++  })
++
++  it('loads an empty index for corrupt JSON', async () => {
++    const corruptPath = join(dir, 'corrupt.json')
++    await writeFile(corruptPath, '<not json', 'utf8')
++    expect(loadIndex(corruptPath, 'v1:abc')).toEqual({ version: 1, normalizerVersion: 'v1:abc', sessions: {} })
++  })
++
++  it('clears sessions when the normalizer version mismatches', async () => {
++    const fold = foldSessionUsage([message('deepseek', 'm1', 10, 1)])
++    await saveIndexAtomic(path, { version: 1, normalizerVersion: 'v1:old', sessions: { s1: entryOf(fold) } })
++    const index = loadIndex(path, 'v1:new')
++    expect(index.version).toBe(1)
++    expect(index.normalizerVersion).toBe('v1:new')
++    expect(index.sessions).toEqual({})
++  })
++
++  it('leaves no .tmp- residue after an atomic save', async () => {
++    const index: UsageIndexFile = { version: 1, normalizerVersion: 'v1:abc', sessions: {} }
++    await saveIndexAtomic(path, index)
++    await saveIndexAtomic(path, index)
++    const files = await readdir(join(dir, 'nested'))
++    expect(files).toEqual(['index.json'])
++    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(index)
++  })
++
++  it('omits the title field when no title is given', () => {
++    const entry = entryOf(foldSessionUsage([message('p', 'm', 1, 1)]))
++    expect('title' in entry).toBe(false)
++    expect(entry.routes).toEqual(entryOf(foldSessionUsage([message('p', 'm', 1, 1)])).routes)
++    expect(entryOf(foldSessionUsage([]), undefined).daily).toEqual({})
++    expect(emptyBuckets()).toEqual({ uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })
++  })
++})

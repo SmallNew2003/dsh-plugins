@@ -1,0 +1,52 @@
+# Review package: e6093a6..HEAD
+
+## Commits
+f62dcb2 fix(usage-host): emit builtin models.json alongside the bundle
+
+## Files changed
+ packages/usage-host/src/index.ts     | 2 ++
+ packages/usage-host/tsdown.config.ts | 3 +++
+ 2 files changed, 5 insertions(+)
+
+## Diff
+diff --git a/packages/usage-host/src/index.ts b/packages/usage-host/src/index.ts
+index 6863cc2..5b95af8 100644
+--- a/packages/usage-host/src/index.ts
++++ b/packages/usage-host/src/index.ts
+@@ -1,14 +1,16 @@
+ /**
+  * Host half of the usage dashboard plugin: the aggregation service plus one
+  * webServer summary route behind the connection browser trust fence.
+  * @module dsh-usage-host
+  */
+ 
+ import type { Context } from '@deepseek-ai/cordis'
+ import type {} from '@deepseek-ai/dsh-host-webserver'
+ 
++export * from './registry.ts'
++
+ export const name = 'dsh-usage-host'
+ 
+ export function apply(ctx: Context): void {
+   void ctx
+ }
+diff --git a/packages/usage-host/tsdown.config.ts b/packages/usage-host/tsdown.config.ts
+index de89063..fc3e5fe 100644
+--- a/packages/usage-host/tsdown.config.ts
++++ b/packages/usage-host/tsdown.config.ts
+@@ -8,12 +8,15 @@ import { defineConfig } from 'tsdown'
+ export default defineConfig([
+   {
+     entry: ['lib/types/index.js'],
+     outDir: 'lib',
+     format: ['esm'],
+     platform: 'node',
+     target: 'es2022',
+     fixedExtension: false,
+     dts: false,
+     clean: false,
++    // registry.ts resolves ./models.json relative to import.meta.url; the
++    // bundle lands in lib/, so the builtin data must sit next to it.
++    copy: ['src/models.json'],
+   },
+ ])
