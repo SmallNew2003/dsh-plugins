@@ -31,7 +31,9 @@ dsh plugin --profile web add /Users/jelvin/000_source_code/dsh-plugins/packages/
 ```
 
 包声明 `dsh.bundle.patch`（插入 node half seat）与 `dsh.client`（浏览器半经
-`exports["./client"]` 被发现），安装后重启 DSH 实例生效。
+`exports["./client"]` 被发现）。注意：`dsh plugin add` 不会热加载——bundle
+层只在实例启动时组合，**安装后必须重启 DSH 实例生效**。每个 profile bundle
+都必须声明 `dsh.bundle.patch`，缺失会让 profile 加载直接失败。
 
 ## 开发
 
