@@ -3,4 +3,4 @@
 # via exports["./client"] and the dsh.client manifest declaration.
 - insert:
     - id: client-ui-usage
-      name: './lib/index.js'
+      name: dsh-client-ui-usage
