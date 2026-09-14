@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { UsageSection } from '../src/client/UsageSection.tsx'
 import { zh } from '../src/client/locales.ts'
 import type { UsageSummaryResponse } from 'dsh-usage-host/shared'
@@ -55,6 +55,19 @@ describe('UsageSection', () => {
 
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText('DeepSeek V4 Flash')).toBeTruthy()
+  })
+
+  it('renders labeled model metrics without a dangling control reference', async () => {
+    mount(SUMMARY)
+    const toggle = await screen.findByRole('button', { name: '展开 DeepSeek 的模型明细' })
+    expect(toggle.hasAttribute('aria-controls')).toBe(false)
+
+    fireEvent.click(toggle)
+
+    const details = screen.getByRole('table', { name: '模型' })
+    expect(within(details).getByRole('columnheader', { name: '模型' })).toBeTruthy()
+    expect(within(details).getByRole('columnheader', { name: '总 Token' })).toBeTruthy()
+    expect(within(details).getByRole('columnheader', { name: '估算金额' })).toBeTruthy()
   })
 
   it('renders a compact overview with a token breakdown and session totals', async () => {
