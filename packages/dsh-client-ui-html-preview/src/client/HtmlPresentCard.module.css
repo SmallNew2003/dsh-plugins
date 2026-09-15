@@ -1,0 +1,134 @@
+/*
+ * Transcript-card chrome. Neutral surfaces that inherit the host palette;
+ * structural colors stay gray-alpha so both light and dark themes read.
+ */
+
+.card {
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9aa3b2;
+}
+
+.dot[data-state='done'] { background: #3d9a50; }
+.dot[data-state='ongoing'] { background: #4f7dd9; }
+.dot[data-state='error'] { background: #d44a3a; }
+.dot[data-state='warning'] { background: #d9a13f; }
+
+.title { font-weight: 600; flex: none; }
+
+.state { color: rgba(128, 128, 128, 0.9); flex: none; }
+
+.paths {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: rgba(128, 128, 128, 0.75);
+}
+
+.content {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(128, 128, 128, 0.2);
+}
+
+.output {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.85;
+}
+
+.inspect {
+  justify-self: start;
+  padding: 2px 8px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.preview {
+  border: 1px solid rgba(128, 128, 128, 0.2);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.previewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  background: rgba(128, 128, 128, 0.08);
+}
+
+.previewPath {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
+.previewActions { display: flex; flex: none; gap: 4px; }
+
+.previewButton {
+  padding: 1px 6px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.previewNote {
+  margin: 0;
+  padding: 8px;
+  font-size: 11px;
+  color: rgba(128, 128, 128, 0.9);
+}
+
+.frame {
+  display: block;
+  width: 100%;
+  height: 480px;
+  border: 0;
+  background: #ffffff;
+}

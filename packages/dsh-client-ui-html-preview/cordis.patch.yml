@@ -1,0 +1,8 @@
+# dsh-client-ui-html-preview bundle layer: the node half is a pure UI plugin —
+# the empty apply only seats the package in the loader; the browser half ships
+# via exports["./client"] and the dsh.client manifest declaration.
+# Every profile bundle MUST declare dsh.bundle.patch: boot reads this file
+# as a bundle layer, and a missing declaration fails the profile load.
+- insert:
+    - id: client-ui-html-preview
+      name: './lib/index.js'
