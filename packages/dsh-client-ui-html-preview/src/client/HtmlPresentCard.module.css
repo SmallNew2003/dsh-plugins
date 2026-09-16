@@ -1,0 +1,173 @@
+/*
+ * Transcript-card chrome. Neutral surfaces that inherit the host palette;
+ * structural colors stay gray-alpha so both light and dark themes read.
+ */
+
+.card {
+  min-width: 0;
+  font-size: 12px;
+}
+
+/* Tool calls reserve a leading rail even when this presentation hides the
+   tool row. Pull the native artifact back to the assistant prose column. */
+.card[data-native-artifact] {
+  --html-preview-tool-rail: 36px;
+  width: calc(100% + var(--html-preview-tool-rail));
+  margin-inline-start: calc(-1 * var(--html-preview-tool-rail));
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, currentColor 9%, transparent);
+  border-radius: 6px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9aa3b2;
+}
+
+.dot[data-state='done'] { background: #3d9a50; }
+.dot[data-state='ongoing'] { background: #4f7dd9; }
+.dot[data-state='error'] { background: #d44a3a; }
+.dot[data-state='warning'] { background: #d9a13f; }
+
+.title { font-weight: 600; flex: none; }
+
+.state { color: rgba(128, 128, 128, 0.9); flex: none; }
+
+.paths {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(128, 128, 128, 0.75);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content {
+  display: grid;
+  gap: 12px;
+  padding: 2px 8px 8px 30px;
+}
+
+.artifactContent {
+  display: grid;
+  gap: 8px;
+}
+
+.output {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.85;
+}
+
+.preview {
+  position: relative;
+  min-width: 0;
+}
+
+.artifactTitle {
+  min-height: 22px;
+  padding: 2px 30px 6px 2px;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moreWrap { position: absolute; z-index: 2; top: 6px; right: 6px; }
+
+.moreButton {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.moreButton:hover,
+.moreButton:focus-visible { background: color-mix(in srgb, currentColor 7%, transparent); }
+
+.menu {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 128px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 6px;
+  background: var(--dsw-alias-background-default, Canvas);
+  box-shadow: 0 6px 20px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.menu button {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu button:hover,
+.menu button:focus-visible { background: color-mix(in srgb, currentColor 7%, transparent); }
+
+.menuDivider { display: block; height: 1px; margin: 4px; background: color-mix(in srgb, currentColor 12%, transparent); }
+
+.previewNote {
+  margin: 0;
+  padding: 8px;
+  font-size: 11px;
+  color: rgba(128, 128, 128, 0.9);
+}
+
+.frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+.source {
+  margin: 8px 0 0;
+  max-height: 22rem;
+  overflow: auto;
+  padding: 10px 12px;
+  border-left: 2px solid color-mix(in srgb, currentColor 14%, transparent);
+  font-family: var(--dsh-font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

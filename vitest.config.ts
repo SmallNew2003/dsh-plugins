@@ -8,6 +8,7 @@ export default defineConfig({
       ['packages/dsh-client-ui-git/tests/**', 'jsdom'],
       ['packages/dsh-client-ui-memory/tests/**', 'jsdom'],
       ['packages/dsh-client-ui-usage/tests/**', 'jsdom'],
+      ['packages/dsh-client-ui-html-preview/tests/**', 'jsdom'],
     ],
   },
 })
