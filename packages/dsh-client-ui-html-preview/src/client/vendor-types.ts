@@ -23,10 +23,20 @@ export interface ClientSlots {
 }
 
 /** Workspace file bytes over the session-authorized remote. */
+export type WorkspaceFileReadAllResult =
+  | { readonly ok: true; readonly value: { readonly data: string } }
+  | { readonly ok: false; readonly error?: { readonly message?: string } }
+
 export interface ClientRemotes {
   workspaceFiles: {
-    readAll(sessionId: string, path: string, signal?: AbortSignal): Promise<Uint8Array>
+    readAll(sessionId: string, path: string, signal?: AbortSignal): Promise<WorkspaceFileReadAllResult>
   }
+}
+
+/** Decode the base64 payload carried by a successful workspace-file response. */
+export function bytesFromBase64(data: string): Uint8Array {
+  const binary = atob(data)
+  return Uint8Array.from(binary, char => char.charCodeAt(0))
 }
 
 /** Read one context service by name without importing the framework types. */

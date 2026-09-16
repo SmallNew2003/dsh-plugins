@@ -33,33 +33,87 @@ export interface HtmlPresentCardProps {
   readonly readFile: HtmlFileReader
 }
 
-type PreviewPhase = 'idle' | 'loading' | 'ready' | 'error' | 'tooLarge'
+type PreviewPhase = 'loading' | 'ready' | 'error' | 'tooLarge'
+const HEIGHT_MESSAGE = 'dsh-html-preview-height'
 
-/** One .html deliverable: collapsed by default (the first expands), fetched once. */
-function HtmlPreviewSection({ sessionId, file, readFile, t, defaultOpen }: {
+function fileName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path
+}
+
+function downloadBlob(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = name
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+/** Append a sandbox-local reporter so the parent can show the full document without same-origin access. */
+function withHeightReporter(html: string): string {
+  const reporter = `<script>(()=>{const report=()=>{const root=document.documentElement,body=document.body;const height=Math.ceil(Math.max(root?.scrollHeight??0,root?.offsetHeight??0,body?.scrollHeight??0,body?.offsetHeight??0));parent.postMessage({type:'${HEIGHT_MESSAGE}',height},'*')};addEventListener('load',()=>{report();new ResizeObserver(report).observe(document.documentElement)},{once:true});setTimeout(report,0)})()</script>`
+  return /<\/body\s*>/i.test(html) ? html.replace(/<\/body\s*>/i, reporter + '</body>') : html + reporter
+}
+
+/** Rasterize static HTML through an SVG foreignObject without relaxing iframe isolation. */
+async function saveHtmlAsImage(html: string, name: string, width: number, height: number): Promise<void> {
+  const source = new DOMParser().parseFromString(html, 'text/html')
+  const css = Array.from(source.head.querySelectorAll('style')).map(style => style.textContent ?? '').join('\n')
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml"><style>${css}</style>${source.body.innerHTML}</div></foreignObject></svg>`
+  const imageUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const next = new Image()
+      next.onload = () => resolve(next)
+      next.onerror = () => reject(new Error('image-render-failed'))
+      next.src = imageUrl
+    })
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d')
+    if (context === null) throw new Error('canvas-unavailable')
+    context.drawImage(image, 0, 0, width, height)
+    const png = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(blob => blob === null ? reject(new Error('png-encode-failed')) : resolve(blob), 'image/png')
+    })
+    downloadBlob(png, fileName(name).replace(/\.html?$/i, '') + '.png')
+  } finally {
+    URL.revokeObjectURL(imageUrl)
+  }
+}
+
+/** One .html deliverable rendered as a quiet conversation artifact. */
+function HtmlPreviewSection({ sessionId, file, readFile, t, inspect }: {
   sessionId: string
   file: PresentFileArg
   readFile: HtmlFileReader
   t: HtmlTranslate
-  defaultOpen: boolean
+  inspect?: (() => void) | undefined
 }) {
-  const [open, setOpen] = useState(defaultOpen)
-  const [phase, setPhase] = useState<PreviewPhase>(defaultOpen ? 'loading' : 'idle')
+  const [phase, setPhase] = useState<PreviewPhase>('loading')
   const [html, setHtml] = useState('')
-  const requestedRef = useRef(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [sourceOpen, setSourceOpen] = useState(false)
+  const [imageError, setImageError] = useState(false)
+  const [frameHeight, setFrameHeight] = useState(480)
+  const frameRef = useRef<HTMLIFrameElement>(null)
+  const loadedRef = useRef(false)
 
   useEffect(() => {
-    if (!open || requestedRef.current) return
-    requestedRef.current = true
+    if (loadedRef.current) return
     const controller = new AbortController()
     setPhase('loading')
     readFile(sessionId, file.path, controller.signal).then(
       bytes => {
+        if (controller.signal.aborted) return
         if (bytes.byteLength > MAX_INLINE_BYTES) {
+          loadedRef.current = true
           setPhase('tooLarge')
           return
         }
         setHtml(new TextDecoder().decode(bytes))
+        loadedRef.current = true
         setPhase('ready')
       },
       () => {
@@ -67,48 +121,83 @@ function HtmlPreviewSection({ sessionId, file, readFile, t, defaultOpen }: {
       },
     )
     return () => controller.abort()
-  }, [open, readFile, sessionId, file.path])
+  }, [readFile, sessionId, file.path])
 
-  /** Open the rendered document from the parent context; the sandbox never gets popups. */
-  const openTab = (): void => {
-    const blob = new Blob([html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank', 'noopener')
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  useEffect(() => {
+    const receiveHeight = (event: MessageEvent<unknown>): void => {
+      if (event.source !== frameRef.current?.contentWindow || typeof event.data !== 'object' || event.data === null) return
+      const payload = event.data as { type?: unknown; height?: unknown }
+      if (payload.type !== HEIGHT_MESSAGE || typeof payload.height !== 'number' || !Number.isFinite(payload.height) || payload.height < 1) return
+      setFrameHeight(Math.ceil(payload.height))
+    }
+    window.addEventListener('message', receiveHeight)
+    return () => window.removeEventListener('message', receiveHeight)
+  }, [])
+
+  const download = (): void => {
+    downloadBlob(new Blob([html], { type: 'text/html' }), fileName(file.path))
+    setMenuOpen(false)
+  }
+
+  const copyCode = (): void => {
+    void navigator.clipboard?.writeText(html)
+    setMenuOpen(false)
+  }
+
+  const saveImage = (): void => {
+    const frame = frameRef.current
+    const width = Math.max(frame?.clientWidth ?? 0, 960)
+    const height = Math.max(frame?.clientHeight ?? 0, 540)
+    setMenuOpen(false)
+    setImageError(false)
+    void saveHtmlAsImage(html, file.path, width, height).catch(() => setImageError(true))
   }
 
   return (
     <section className={css.preview} data-path={file.path} data-phase={phase}>
-      <header className={css.previewHeader}>
-        <span className={css.previewPath}>{file.path}</span>
-        <span className={css.previewActions}>
-          {open ? (
-            <button type="button" className={css.previewButton} onClick={() => { setOpen(false) }}>
-              {t('preview.collapse')}
-            </button>
-          ) : (
-            <button type="button" className={css.previewButton} onClick={() => { setOpen(true) }}>
-              {t('preview.expand')}
-            </button>
-          )}
-          {phase === 'ready' && (
-            <button type="button" className={css.previewButton} onClick={openTab}>
-              {t('preview.openTab')}
-            </button>
+      <div className={css.artifactTitle}>{fileName(file.path)}</div>
+      {phase === 'ready' && (
+        <span className={css.moreWrap}>
+          <button
+            type="button"
+            className={css.moreButton}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label={t('preview.more')}
+            onClick={() => setMenuOpen(open => !open)}
+          >
+            •••
+          </button>
+          {menuOpen && (
+            <div className={css.menu} role="menu">
+              <button type="button" role="menuitem" onClick={download}>{t('preview.download')}</button>
+              <button type="button" role="menuitem" onClick={saveImage}>{t('preview.saveImage')}</button>
+              <button type="button" role="menuitem" onClick={copyCode}>{t('preview.copyCode')}</button>
+              <button type="button" role="menuitem" onClick={() => { setSourceOpen(open => !open); setMenuOpen(false) }}>
+                {sourceOpen ? t('preview.hideCode') : t('preview.viewCode')}
+              </button>
+              {inspect && <><span className={css.menuDivider} /><button type="button" role="menuitem" onClick={() => { inspect(); setMenuOpen(false) }}>{t('row.inspect')}</button></>}
+            </div>
           )}
         </span>
-      </header>
+      )}
       {phase === 'loading' && <p className={css.previewNote}>{t('preview.loading')}</p>}
       {phase === 'error' && <p className={css.previewNote}>{t('preview.error')}</p>}
       {phase === 'tooLarge' && <p className={css.previewNote}>{t('preview.tooLarge')}</p>}
+      {imageError && <p className={css.previewNote}>{t('preview.saveImageError')}</p>}
       {phase === 'ready' && (
-        <iframe
-          className={css.frame}
-          sandbox="allow-scripts"
-          srcDoc={html}
-          title={t('preview.frameLabel', { path: file.path })}
-          referrerPolicy="no-referrer"
-        />
+        <>
+          <iframe
+            ref={frameRef}
+            className={css.frame}
+            sandbox="allow-scripts"
+            srcDoc={withHeightReporter(html)}
+            title={t('preview.frameLabel', { path: file.path })}
+            referrerPolicy="no-referrer"
+            style={{ height: frameHeight + 'px' }}
+          />
+          {sourceOpen && <pre className={css.source}>{html}</pre>}
+        </>
       )}
     </section>
   )
@@ -128,40 +217,37 @@ const DOT_STATE: Record<PresentCallState, string> = {
  */
 export function HtmlPresentCard({ sessionId, block, inspect, t, readFile }: HtmlPresentCardProps) {
   const model = presentModel(block)
-  const expandable = model.details !== '' || model.htmlFiles.length > 0
-  const [expanded, setExpanded] = useState(model.state === 'ok' && model.htmlFiles.length > 0)
-  const pathsText = model.files.map(file => file.path).join(', ')
+  const showDetails = model.details !== '' && model.state !== 'ok'
+  const showArtifacts = model.state === 'ok' && model.htmlFiles.length > 0
+  const showContent = showDetails || showArtifacts
+  const nativeArtifact = showArtifacts && !showDetails
+  const nonHtmlPaths = model.htmlFiles.length === 0 ? model.files.map(file => fileName(file.path)).join(', ') : ''
   return (
-    <div data-tool="present" data-state={model.state} className={css.card}>
-      <button
-        type="button"
-        className={css.row}
-        aria-expanded={expandable ? expanded : undefined}
-        onClick={() => {
-          if (expandable) setExpanded(value => !value)
-        }}
-      >
-        <span className={css.dot} data-state={DOT_STATE[model.state]} aria-hidden="true" />
-        <span className={css.title}>{t('row.title')}</span>
-        <span className={css.state}>{t(`row.${model.state}`)}</span>
-        {pathsText !== '' && <span className={css.paths}>{pathsText}</span>}
-      </button>
-      {expanded && (
-        <div className={css.content}>
-          {model.details !== '' && <pre className={css.output}>{model.details}</pre>}
-          {inspect && (
-            <button type="button" className={css.inspect} onClick={inspect}>
-              {t('row.inspect')}
-            </button>
-          )}
-          {model.htmlFiles.map((file, index) => (
+    <div
+      data-tool="present"
+      data-state={model.state}
+      data-native-artifact={nativeArtifact || undefined}
+      className={css.card}
+    >
+      {!nativeArtifact && (
+        <div className={css.row}>
+          <span className={css.dot} data-state={DOT_STATE[model.state]} aria-hidden="true" />
+          <span className={css.title}>{t('row.title')}</span>
+          <span className={css.state}>{t(`row.${model.state}`)}</span>
+          {nonHtmlPaths !== '' && <span className={css.paths}>{nonHtmlPaths}</span>}
+        </div>
+      )}
+      {showContent && (
+        <div className={nativeArtifact ? css.artifactContent : css.content}>
+          {showDetails && <pre className={css.output}>{model.details}</pre>}
+          {showArtifacts && model.htmlFiles.map(file => (
             <HtmlPreviewSection
               key={file.path}
               sessionId={sessionId}
               file={file}
               readFile={readFile}
               t={t}
-              defaultOpen={index === 0}
+              inspect={inspect}
             />
           ))}
         </div>

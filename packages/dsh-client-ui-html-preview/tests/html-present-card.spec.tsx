@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { StrictMode } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HtmlPresentCard, type HtmlPresentCardProps } from '../src/client/HtmlPresentCard.tsx'
@@ -73,17 +74,53 @@ describe('HtmlPresentCard', () => {
     expect(readFile).toHaveBeenCalledWith(SESSION, 'diagram.html', expect.anything())
   })
 
-  it('starts later html files collapsed and renders them on demand', async () => {
+  it('removes process chrome around a successful html artifact', async () => {
+    const readFile = vi.fn(() => Promise.resolve(bytesOf('<p>artifact body</p>')))
+    render(<HtmlPresentCard {...htmlProps(okBlock([{ path: 'diagram.html' }]), readFile)} />)
+
+    await screen.findByTitle(zh['preview.frameLabel'].replace('{path}', 'diagram.html'))
+
+    expect(screen.queryByText(zh['row.title'])).toBeNull()
+    expect(screen.queryByText(zh['row.ok'])).toBeNull()
+    expect(screen.getByText('diagram.html')).toBeTruthy()
+    expect(document.querySelector('[data-native-artifact]')).toBeTruthy()
+  })
+
+  it('expands the frame to the reported document height without scaling', async () => {
+    const { container } = render(
+      <HtmlPresentCard {...htmlProps(okBlock([{ path: 'diagram.html' }]), () => Promise.resolve(bytesOf('<p>tall artifact</p>')))} />,
+    )
+    const iframe = await screen.findByTitle(zh['preview.frameLabel'].replace('{path}', 'diagram.html'))
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'dsh-html-preview-height', height: 960 },
+      source: iframe.contentWindow,
+    }))
+
+    await waitFor(() => expect(container.querySelector('iframe')?.style.height).toBe('960px'))
+  })
+
+  it('retries the initial read after StrictMode aborts its first effect', async () => {
+    const readFile = vi.fn(() => Promise.resolve(bytesOf('<p>strict mode</p>')))
+    const { container } = render(
+      <StrictMode>
+        <HtmlPresentCard {...htmlProps(okBlock([{ path: 'diagram.html' }]), readFile)} />
+      </StrictMode>,
+    )
+    await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+    expect(readFile).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('iframe')?.getAttribute('srcdoc')).toContain('strict mode')
+  })
+
+  it('renders every presented html artifact directly in the transcript', async () => {
     const readFile = vi.fn((_sessionId: string, path: string) =>
       Promise.resolve(bytesOf('<p>' + path + '</p>')),
     )
     const { container } = render(
       <HtmlPresentCard {...htmlProps(okBlock([{ path: 'a.html' }, { path: 'b.html' }]), readFile)} />,
     )
-    await waitFor(() => expect(container.querySelectorAll('iframe')).toHaveLength(1))
-    expect(container.querySelector('iframe')!.getAttribute('srcdoc')).toContain('<p>a.html</p>')
-    fireEvent.click(screen.getByRole('button', { name: zh['preview.expand'] }))
     await waitFor(() => expect(container.querySelectorAll('iframe')).toHaveLength(2))
+    expect(container.querySelector('iframe')!.getAttribute('srcdoc')).toContain('<p>a.html</p>')
     expect(container.querySelectorAll('iframe')[1]?.getAttribute('srcdoc')).toContain('<p>b.html</p>')
   })
 
@@ -102,22 +139,47 @@ describe('HtmlPresentCard', () => {
     expect(container.querySelector('iframe')).toBeNull()
   })
 
-  it('opens the rendered document in a new tab from the parent context', async () => {
+  it('exposes the WorkBuddy-style artifact commands from one overflow menu', async () => {
     const readFile = vi.fn(() => Promise.resolve(bytesOf('<p>tab body</p>')))
-    const { container } = render(
+    render(
       <HtmlPresentCard {...htmlProps(okBlock([{ path: 'diagram.html' }]), readFile)} />,
     )
-    await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
-    const opened = vi.fn()
-    vi.spyOn(window, 'open').mockImplementation(opened as unknown as typeof window.open)
-    Object.defineProperty(URL, 'createObjectURL', {
+    await screen.findByTitle(zh['preview.frameLabel'].replace('{path}', 'diagram.html'))
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }))
+
+    expect(screen.getByRole('menu')).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '下载' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '保存为图片' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '复制代码' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '查看代码' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '收起预览' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '在新标签打开' })).toBeNull()
+  })
+
+  it('copies the rendered HTML when the artifact command is selected', async () => {
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
-      writable: true,
-      value: vi.fn(() => 'blob:rendered'),
+      value: { writeText },
     })
-    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: vi.fn() })
-    fireEvent.click(screen.getByRole('button', { name: zh['preview.openTab'] }))
-    expect(opened).toHaveBeenCalledWith('blob:rendered', '_blank', 'noopener')
+    render(<HtmlPresentCard {...htmlProps(okBlock([{ path: 'diagram.html' }]), () => Promise.resolve(bytesOf('<p>copy me</p>')))} />)
+    await screen.findByTitle(zh['preview.frameLabel'].replace('{path}', 'diagram.html'))
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '复制代码' }))
+
+    expect(writeText).toHaveBeenCalledWith('<p>copy me</p>')
+  })
+
+  it('shows source code inline when the artifact command is selected', async () => {
+    render(<HtmlPresentCard {...htmlProps(okBlock([{ path: 'diagram.html' }]), () => Promise.resolve(bytesOf('<p>inspect me</p>')))} />)
+    await screen.findByTitle(zh['preview.frameLabel'].replace('{path}', 'diagram.html'))
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '查看代码' }))
+
+    expect(screen.getByText('<p>inspect me</p>')).toBeTruthy()
   })
 
   it('shows no preview while the call is still running', () => {

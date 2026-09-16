@@ -10,7 +10,7 @@ describe('plugin wiring', () => {
   function stubCtx() {
     const registrations: { name: string; key?: string; priority?: number; locale?: string; inject?: () => unknown; component?: unknown }[] = []
     const dictionaries: { ns: string; dicts: unknown }[] = []
-    const readAll = vi.fn(() => Promise.resolve(new Uint8Array(0)))
+    const readAll = vi.fn(() => Promise.resolve({ ok: true as const, value: { data: btoa('preview') } }))
     const ctx = {
       locale: { register: (ns: string, dicts: unknown) => { dictionaries.push({ ns, dicts }) } },
       remote: { workspaceFiles: { readAll } },
@@ -51,14 +51,25 @@ describe('plugin wiring', () => {
     expect(entry.component).toBe(HtmlPresentCard)
   })
 
-  it('injects a file reader delegating to the workspace files remote', async () => {
+  it('injects a file reader that decodes the workspace files remote result', async () => {
     const { ctx, contributed, registrations, readAll } = stubCtx()
     apply(ctx)
     contributed[0]!()
     const face = registrations[0]!.inject as () => { readFile: (sessionId: string, path: string, signal?: AbortSignal) => Promise<Uint8Array> }
     const { readFile } = face()
     const signal = new AbortController().signal
-    await readFile('sess-9', 'diagram.html', signal)
+    await expect(readFile('sess-9', 'diagram.html', signal)).resolves.toSatisfy(bytes =>
+      Array.from(bytes).join(',') === Array.from(new TextEncoder().encode('preview')).join(','),
+    )
     expect(readAll).toHaveBeenCalledWith('sess-9', 'diagram.html', signal)
+  })
+
+  it('rejects a failed workspace file response', async () => {
+    const { ctx, contributed, registrations, readAll } = stubCtx()
+    readAll.mockResolvedValueOnce({ ok: false, error: { message: 'not found' } })
+    apply(ctx)
+    contributed[0]!()
+    const face = registrations[0]!.inject as () => { readFile: (sessionId: string, path: string) => Promise<Uint8Array> }
+    await expect(face().readFile('sess-9', 'missing.html')).rejects.toThrow('not found')
   })
 })
